@@ -1,0 +1,44 @@
+# Qlib-Server 依赖锁定（阶段 3 实测基线：python 3.10 / linux amd64）
+#
+# 结构分三段：
+#   ① pyqlib 全量安装（server 只用到 qlib.data / qlib.log，但保持官方完整性，
+#      避免 --no-deps 手挑依赖漏掉运行时 import）；
+#   ② 数据栈钉死 —— pyqlib 0.9.7 早于 numpy 2.0，必须锁 numpy<2；
+#   ③ server 兼容性关键 —— 必须覆盖 ①② 可能带入的同名包（Engine.IO v3 代际）。
+#
+# 版本矩阵依据：docs/stage1/06-qlib-integration.md §2；实测结论回写该文件 §8。
+
+# ---- ① Qlib ------------------------------------------------------------------
+pyqlib==0.9.7
+
+# ---- ② 数据栈 ----------------------------------------------------------------
+numpy==1.26.4
+pandas==2.0.3
+pyarrow==15.0.2
+
+# ---- ③ Qlib-Server 兼容层（Engine.IO v3 代际：socketio 4.x ↔ engineio 3.x）----
+python-engineio==3.11.2
+python-socketio==4.4.0
+# flask-socketio 3.1.2 → 4.3.2：3.1.2/4.3.2 均模块级 `from werkzeug.serving import
+# run_with_reloader`（Werkzeug 2.1 起移除，2.0.3 仍有——实测确认），故必须 Werkzeug≤2.0.3。
+# 4.3.2 是最后一个同时满足 python-socketio<5（保 EIO3：server 4.4.0 ↔ worker client 4.6.1）
+# 且与 Flask 2.1.x 共存的版本（5.x 强制 python-socketio>=5.0.2 → EIO4，不可用）。
+flask-socketio==4.3.2
+# Flask 2.2.5 → 2.1.2：Flask 2.2 强制 Werkzeug>=2.2.2，与 run_with_reloader 需求冲突。
+# 2.1.2 满足上游 setup.py `Flask>=1.0.2` 与 flask-socketio 4.3.2 `Flask>=0.9`；
+# 同时保留 `_request_ctx_stack`（flask-socketio 4.3.2 模块级 import，2.3 才移除）。
+Flask==2.1.2
+Werkzeug==2.0.3
+# 官方 setup.py 约束 gevent<23；cp310 有 wheel（3.11 起无）
+gevent==22.10.2
+greenlet==3.0.3
+pika==1.4.4
+redis==5.0.1
+python-redis-lock==3.3.1
+# 官方 setup.py 约束 wsproto<1.2（与旧 engineio 不兼容）
+wsproto==1.1.0
+# 官方 setup.py 依赖（data_updater / CLI）
+schedule==1.2.2
+fabric2==2.6.0
+fire==0.5.0
+loguru==0.7.2

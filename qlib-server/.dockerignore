@@ -1,0 +1,9 @@
+# 构建上下文瘦身：运行时只需要 qlib_server 包本体 + main.py + 配置模板
+# （setup.py 读 README.md 作 long_description，必须保留）
+vendor/qlib-server/docs
+vendor/qlib-server/docker_support
+vendor/qlib-server/scripts
+vendor/qlib-server/.gitignore
+vendor/qlib-server/CHANGES.rst
+**/__pycache__
+*.md.bak
