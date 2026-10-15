@@ -1,0 +1,72 @@
+[project]
+name = "qqlab-backend"
+version = "0.1.0"
+description = "QlibQuantLab backend — quant research API and task worker (research tooling only, no investment advice)"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+dependencies = [
+    "fastapi>=0.115,<1",
+    "uvicorn[standard]>=0.30,<1",
+    "pydantic>=2.9,<3",
+    "pydantic-settings>=2.6,<3",
+    "sqlalchemy[asyncio]>=2.0.36,<3",
+    "alembic>=1.14,<2",
+    "asyncpg>=0.30,<1",
+    "aiosqlite>=0.20,<1",
+    "redis>=5.0,<9",
+    "aio-pika>=9.5,<10",
+    "boto3>=1.35,<2",
+    "pyjwt>=2.10,<3",
+    "httpx>=0.27,<1",
+]
+
+[project.optional-dependencies]
+# Qlib 在线模式客户端依赖。仅 worker 需要，默认不装（API 进程绝不 import qlib）。
+# 版本对齐 qlib-server 官方 Dockerfile 的 python-socketio==4.4.0 / python-engineio==3.11.2
+# （Engine.IO v3 协议），client 侧同代际取 4.x/3.x 上限。阶段 3 实测后在 uv.lock 中钉死。
+qlib = [
+    "pyqlib>=0.8,<0.10",
+    "python-socketio>=4.6,<5",
+    "python-engineio>=3.13,<4",
+]
+dev = [
+    "pytest>=8.3,<10",
+    "pytest-asyncio>=0.24,<2",
+    "ruff>=0.8,<1",
+]
+
+[project.scripts]
+qqlab-worker = "qqlab.worker.main:main"
+qqlab-api = "qqlab.main:run"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/qqlab"]
+
+[tool.uv]
+package = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+# 架构边界：只有 adapters / container / worker.qlib_env 可以碰具体 SDK
+"src/qqlab/adapters/**" = ["E402"]
+# FastAPI 的标准写法：Depends / Query / Path 出现在参数默认值里是官方推荐形态
+"src/qqlab/api/**" = ["B008"]
