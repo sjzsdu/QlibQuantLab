@@ -1,0 +1,7 @@
+# pnpm 11+ 构建脚本许可清单（allowBuilds 替代旧的 ignoredBuiltDependencies，
+# package.json 的 pnpm.* 配置在 pnpm 11+ 已不再生效）
+allowBuilds:
+  # unrs-resolver 的 postinstall 只在缺少平台绑定时做兜底下载；
+  # 平台绑定已由其 optionalDependencies（@unrs/resolver-binding-*）直接提供，
+  # 无需执行构建脚本，显式拒绝以保证安装可离线、可重复。
+  unrs-resolver: false
