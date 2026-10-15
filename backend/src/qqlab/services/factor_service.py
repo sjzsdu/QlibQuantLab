@@ -115,6 +115,7 @@ class FactorService:
             request_id=self._ctx.request_id,
             ip=self._ctx.ip,
         )
+        await self._session.commit()
         return await self._out(row)
 
     async def update(self, factor_id: str, data: FactorUpdateIn) -> FactorOut:
@@ -150,6 +151,7 @@ class FactorService:
             request_id=self._ctx.request_id,
             ip=self._ctx.ip,
         )
+        await self._session.commit()
         return await self._out(row)
 
     async def delete(self, factor_id: str, *, confirm: bool) -> bool:
@@ -171,6 +173,7 @@ class FactorService:
             request_id=self._ctx.request_id,
             ip=self._ctx.ip,
         )
+        await self._session.commit()
         return True
 
     async def publish(self, factor_id: str, *, confirm: bool) -> FactorOut:
@@ -190,6 +193,7 @@ class FactorService:
             request_id=self._ctx.request_id,
             ip=self._ctx.ip,
         )
+        await self._session.commit()
         return await self._out(row)
 
 

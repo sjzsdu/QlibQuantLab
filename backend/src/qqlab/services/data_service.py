@@ -155,6 +155,9 @@ class DataSourceService(_BaseDataService):
             request_id=self._ctx.request_id,
             ip=self._ctx.ip,
         )
+        # 写路径显式提交：请求级 session 的 teardown 在响应发出后才执行，
+        # 不提交会让「创建后立刻读」的下一个请求读不到（read-your-writes）。
+        await self._session.commit()
         return await self.get(str(row.id))
 
     async def update(self, source_id: str, data: DataSourceUpdateIn) -> DataSourceOut:
@@ -181,6 +184,7 @@ class DataSourceService(_BaseDataService):
             request_id=self._ctx.request_id,
             ip=self._ctx.ip,
         )
+        await self._session.commit()
         return await self.get(str(row.id))
 
     async def delete(self, source_id: str, *, confirm: bool) -> bool:
@@ -203,6 +207,7 @@ class DataSourceService(_BaseDataService):
             request_id=self._ctx.request_id,
             ip=self._ctx.ip,
         )
+        await self._session.commit()
         return True
 
 
@@ -297,6 +302,7 @@ class DataLicenseService(_BaseDataService):
             request_id=self._ctx.request_id,
             ip=self._ctx.ip,
         )
+        await self._session.commit()
         return await self.get(str(row.id))
 
     async def update(self, license_id: str, data: DataLicenseUpdateIn) -> DataLicenseOut:
@@ -328,6 +334,7 @@ class DataLicenseService(_BaseDataService):
             request_id=self._ctx.request_id,
             ip=self._ctx.ip,
         )
+        await self._session.commit()
         return await self.get(str(row.id))
 
 
@@ -426,6 +433,7 @@ class DatasetService(_BaseDataService):
             request_id=self._ctx.request_id,
             ip=self._ctx.ip,
         )
+        await self._session.commit()
         return await self._out(row)
 
     # ------------------------------------------------------------- 导入
@@ -453,6 +461,7 @@ class DatasetService(_BaseDataService):
             request_id=self._ctx.request_id,
             ip=self._ctx.ip,
         )
+        await self._session.commit()
         return str(row.id), job_id
 
     # ------------------------------------------------------------- 预览

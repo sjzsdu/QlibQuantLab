@@ -75,6 +75,7 @@ class AdminService:
             request_id=self._ctx.request_id,
             ip=self._ctx.ip,
         )
+        await self._session.commit()
         return await self._member_out(user_id)
 
     async def update_member_roles(self, user_id: str, roles: list[str]) -> MemberOut:
@@ -98,6 +99,7 @@ class AdminService:
             request_id=self._ctx.request_id,
             ip=self._ctx.ip,
         )
+        await self._session.commit()
         return await self._member_out(user_id)
 
     async def remove_member(self, user_id: str, *, confirm: bool) -> bool:
@@ -117,6 +119,7 @@ class AdminService:
             request_id=self._ctx.request_id,
             ip=self._ctx.ip,
         )
+        await self._session.commit()
         return True
 
     async def _member_out(self, user_id: str) -> MemberOut:
@@ -159,6 +162,7 @@ class AdminService:
             request_id=self._ctx.request_id,
             ip=self._ctx.ip,
         )
+        await self._session.commit()
         return ConfigOut(
             config_key=row.config_key,
             value={} if row.is_secret else dict(row.value or {}),

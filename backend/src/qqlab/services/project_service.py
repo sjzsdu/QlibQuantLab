@@ -103,6 +103,7 @@ class ProjectService:
             request_id=self._ctx.request_id,
             ip=self._ctx.ip,
         )
+        await self._session.commit()
         names = await self._repo.created_by_names([project])
         return _to_out(project, names)
 
@@ -130,6 +131,7 @@ class ProjectService:
             request_id=self._ctx.request_id,
             ip=self._ctx.ip,
         )
+        await self._session.commit()
         names = await self._repo.created_by_names([project])
         return _to_out(project, names)
 
@@ -149,6 +151,7 @@ class ProjectService:
             request_id=self._ctx.request_id,
             ip=self._ctx.ip,
         )
+        await self._session.commit()
         return str(project.id)
 
     # ---------------------------------------------------------------- 成员
@@ -197,6 +200,7 @@ class ProjectService:
             request_id=self._ctx.request_id,
             ip=self._ctx.ip,
         )
+        await self._session.commit()
         return ProjectMemberOut(
             user_id=str(member.user_id),
             username=username,
@@ -224,6 +228,7 @@ class ProjectService:
             request_id=self._ctx.request_id,
             ip=self._ctx.ip,
         )
+        await self._session.commit()
         return True
 
     # ---------------------------------------------------------------- 可见性
@@ -244,6 +249,7 @@ class ProjectService:
             request_id=self._ctx.request_id,
             ip=self._ctx.ip,
         )
+        await self._session.commit()
         names = await self._repo.created_by_names([project])
         return _to_out(project, names)
 

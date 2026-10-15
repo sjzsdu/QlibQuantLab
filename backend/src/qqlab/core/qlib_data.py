@@ -47,10 +47,30 @@ def _safe_instrument(data_root: Path, instrument: str) -> Path:
     if not _INSTRUMENT_RE.fullmatch(name):
         raise DataPathError(f"非法标的代码：{instrument!r}")
     features = (data_root / "features").resolve()
-    target = (features / name).resolve()
-    if not target.is_relative_to(features):  # noqa: UP038 - 语义清晰优先
-        raise DataPathError(f"标的路径越界：{instrument!r}")
-    return target
+    # 存储目录名小写（qlib 约定），all.txt 里可能是大写（SH600000）
+    for candidate in (name, name.lower()):
+        target = (features / candidate).resolve()
+        if not target.is_relative_to(features):  # noqa: UP038 - 语义清晰优先
+            raise DataPathError(f"标的路径越界：{instrument!r}")
+        if target.is_dir():
+            return target
+    raise DataPathError(f"标的目录不存在：{instrument!r}")
+
+
+def _field_bin_path(instrument_dir: Path, field: str, freq: str) -> Path | None:
+    """按 dump_bin 实际布局定位字段文件。
+
+    实测（qlib 官方 GetData zip，2026-10）为**平铺**：``features/{inst}/{field}.{freq}.bin``；
+    部分旧版 dump 会多一层频率子目录 ``features/{inst}/{freq}/{field}.{freq}.bin``，
+    两种布局都支持（平铺优先）。
+    """
+    flat = instrument_dir / f"{field}.{freq}.bin"
+    if flat.exists():
+        return flat
+    nested = instrument_dir / freq / f"{field}.{freq}.bin"
+    if nested.exists():
+        return nested
+    return None
 
 
 def read_calendar(data_root: Path, *, start: str | None = None, end: str | None = None) -> list[str]:
@@ -112,9 +132,9 @@ def read_ohlcv(
 
     columns: dict[str, array] = {}
     for name in OHLCV_FIELDS:
-        bin_path = instrument_dir / freq / f"{name}.{freq}.bin"
-        if not bin_path.exists():
-            raise DataPathError(f"标的 {instrument} 缺少字段文件：{bin_path.name}")
+        bin_path = _field_bin_path(instrument_dir, name, freq)
+        if bin_path is None:
+            raise DataPathError(f"标的 {instrument} 缺少字段文件：{name}.{freq}.bin")
         buf = array("f")
         with bin_path.open("rb") as fh:
             buf.fromfile(fh, bin_path.stat().st_size // 4)
