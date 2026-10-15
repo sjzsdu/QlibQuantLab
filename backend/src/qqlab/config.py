@@ -91,8 +91,14 @@ class Settings(BaseSettings):
     CASDOOR_ROLE_MAP: str = "{}"
 
     # ------------------------------------------------------ Qlib 计算（worker）
+    #: 计算后端：qlib（真数据，经 Qlib-Server）| stub（合成数据对照，零依赖）
+    COMPUTE_BACKEND: str = "stub"
     QLIB_SERVER_WS_URL: str  # 例：ws://qlib-server:9710
     QLIB_DATA_ROOT: str = "/qlib_data"
+    #: 每个 org 的数据子目录名（bootstrap 与 Qlib-Server 的 QLIB_DATA 保持一致）
+    QLIB_DATA_SUBDIR: str = "cn_data"
+    #: 标的截断开关（决策 #2）：0 = 全量；>0 = 导入/回测只取前 N 个标的（首次 smoke 用小集合）
+    QLIB_DATA_SYMBOLS: int = 0
     QLIB_EXPERIMENT_ROOT: str = "/experiments"
     QLIB_REGION: str = "cn"
     QLIB_WORKER_CONCURRENCY: int = 1
@@ -140,6 +146,13 @@ class Settings(BaseSettings):
         if not v.strip():
             raise ValueError("外部依赖地址必须通过环境变量注入，不能为空")
         return v.strip()
+
+    @field_validator("COMPUTE_BACKEND")
+    @classmethod
+    def _compute_backend(cls, v: str) -> str:
+        if v not in ("qlib", "stub"):
+            raise ValueError(f"COMPUTE_BACKEND 必须是 qlib | stub，收到 {v!r}")
+        return v
 
     @model_validator(mode="after")
     def _validate(self) -> Settings:

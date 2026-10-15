@@ -3,7 +3,7 @@ name = "qqlab-backend"
 version = "0.1.0"
 description = "QlibQuantLab backend — quant research API and task worker (research tooling only, no investment advice)"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.11"
 license = { text = "MIT" }
 dependencies = [
     "fastapi>=0.115,<1",
@@ -22,13 +22,14 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Qlib 在线模式客户端依赖。仅 worker 需要，默认不装（API 进程绝不 import qlib）。
-# 版本对齐 qlib-server 官方 Dockerfile 的 python-socketio==4.4.0 / python-engineio==3.11.2
-# （Engine.IO v3 协议），client 侧同代际取 4.x/3.x 上限。阶段 3 实测后在 uv.lock 中钉死。
+# Qlib 在线模式客户端依赖（阶段 3 决策 #5：worker 基座锁 Python 3.11 ——
+# pyqlib 0.9.7 在 cp312 的 tables/lightgbm wheel 不保证齐全，3.11 一次到位）。
+# 版本矩阵（docs/stage1/06 §2）：client 端 socketio 4.x/3.x 上限，与 server 端
+# 4.4.0/3.11.2 同代际（Engine.IO v3）；阶段 3 实测结论回写 06 文档 §8。
 qlib = [
-    "pyqlib>=0.8,<0.10",
-    "python-socketio>=4.6,<5",
-    "python-engineio>=3.13,<4",
+    "pyqlib==0.9.7",
+    "python-socketio==4.6.1",
+    "python-engineio==3.14.2",
 ]
 dev = [
     "pytest>=8.3,<10",

@@ -83,15 +83,19 @@ class TrainingRun(UUIDPk, TimestampMixin, TenantMixin, Base):
 
 
 class Strategy(UUIDPk, TimestampMixin, TenantMixin, Base):
-    """策略：模型 + 信号规则。默认私有，公开需二次确认。"""
+    """策略：信号规则 + 可选模型绑定。默认私有，公开需二次确认。
+
+    ``model_id`` 可空：阶段 3 的 momentum-topk 是**纯规则信号**（决策 #6，训练在阶段 5），
+    不存在关联模型；阶段 5 训练出模型后再绑定。
+    """
 
     __tablename__ = "strategies"
 
     project_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    model_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid, ForeignKey("models.id", ondelete="RESTRICT"), nullable=False, index=True
+    model_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("models.id", ondelete="RESTRICT"), nullable=True, index=True
     )
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     signal_config: Mapped[dict] = mapped_column(JSONType, nullable=False, default=dict)

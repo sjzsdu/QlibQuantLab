@@ -138,3 +138,58 @@ def test_api_does_not_import_qlib() -> None:
             if module.split(".")[0] == "qlib":
                 offenders.append(f"{_rel(path)} -> {module}")
     assert not offenders, "API 进程禁止 import qlib:\n" + "\n".join(offenders)
+
+
+#: 允许出现 qlib 的文件白名单（阶段 3 收敛：只剩 qlib_env 与 qlib_compute）
+QLIB_WHITELIST = frozenset({"worker/qlib_env.py", "adapters/compute/qlib_compute.py"})
+
+
+def _is_qlib_module(module: str) -> bool:
+    return module.split(".")[0] == "qlib"
+
+
+def test_qlib_import_whitelist() -> None:
+    """全仓扫描：qlib 只允许出现在白名单文件（且必须函数内延迟导入）。"""
+    offenders = []
+    for path in sorted(SRC.rglob("*.py")):
+        rel = _rel(path)
+        if rel in QLIB_WHITELIST:
+            continue
+        for module in _imported_modules(path):
+            if _is_qlib_module(module):
+                offenders.append(f"{rel} -> {module}")
+    assert not offenders, f"qlib 只允许出现在 {sorted(QLIB_WHITELIST)}:\n" + "\n".join(offenders)
+
+
+def test_qlib_never_imported_at_module_level() -> None:
+    """白名单文件也必须**函数内延迟导入** —— 模块顶层 import 会让任何误 import 触发加载。"""
+    offenders = []
+    for rel in sorted(QLIB_WHITELIST):
+        path = SRC / rel
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in tree.body:  # 仅模块顶层语句
+            modules: list[str] = []
+            if isinstance(node, ast.Import):
+                modules = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+                modules = [node.module]
+            for module in modules:
+                if _is_qlib_module(module):
+                    offenders.append(f"{rel} -> {module}")
+    assert not offenders, "qlib 必须是函数内延迟导入:\n" + "\n".join(offenders)
+
+
+def test_api_process_never_loads_qlib_module() -> None:
+    """子进程级验证：import qqlab.main（Web 进程）后 sys.modules 里没有 qlib。"""
+    import subprocess  # noqa: PLC0415
+
+    code = (
+        "import sys; import qqlab.main; "
+        "loaded = sorted(m for m in sys.modules if m.split('.')[0] == 'qlib'); "
+        "assert not loaded, loaded; print('ok')"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, timeout=120, check=False
+    )
+    assert proc.returncode == 0, f"stderr={proc.stderr}\nstdout={proc.stdout}"
+    assert "ok" in proc.stdout

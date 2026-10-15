@@ -33,6 +33,11 @@ class Message:
 
 Handler = Callable[[Message], Awaitable[None]]
 
+#: 应用自己的任务队列名（vhost 见 MQ_URL）。worker 消费、JobService 发布，
+#: 两边共用本常量防命名漂移 —— 放端口模块而非 services，因为 worker（py3.11）
+#: 不能 import services（其 __init__ 链到 schemas 的 PEP 695 语法，需 py3.12）。
+JOB_QUEUE = "qqlab_jobs"
+
 
 @runtime_checkable
 class MessageQueueProvider(Protocol):

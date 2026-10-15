@@ -13,7 +13,11 @@ from typing import Any, Protocol, runtime_checkable
 
 @dataclass(slots=True)
 class CostConfig:
-    """回测费用假设。三件套必填，API 层校验，报告页脚回显。"""
+    """回测费用假设。三件套必填，API 层校验，报告页脚回显。
+
+    ``from_dict`` 兼容两种存储形态：``to_dict()`` 的嵌套形态，以及
+    API 直传的扁平形态（slippage_value / impact_rate_per_million 顶层键）。
+    """
 
     commission_rate: float = 0.0005
     min_commission: float = 5.0
@@ -33,6 +37,28 @@ class CostConfig:
             "stamp_duty_sell": self.stamp_duty_sell,
         }
 
+    @classmethod
+    def from_dict(cls, data: dict[str, Any] | None) -> CostConfig:
+        data = dict(data or {})
+        slippage = data.get("slippage") or {}
+        impact = data.get("impact_cost") or {}
+        defaults = cls()
+        return cls(
+            commission_rate=float(data.get("commission_rate", defaults.commission_rate)),
+            min_commission=float(data.get("min_commission", defaults.min_commission)),
+            slippage_type=str(slippage.get("type", data.get("slippage_type", defaults.slippage_type))),
+            slippage_value=float(slippage.get("value", data.get("slippage_value", defaults.slippage_value))),
+            impact_rate_per_million=float(
+                impact.get(
+                    "rate_per_million", data.get("impact_rate_per_million", defaults.impact_rate_per_million)
+                )
+            ),
+            settlement_fee_rate=float(
+                data.get("settlement_fee", data.get("settlement_fee_rate", defaults.settlement_fee_rate))
+            ),
+            stamp_duty_sell=float(data.get("stamp_duty_sell", defaults.stamp_duty_sell)),
+        )
+
 
 @dataclass(slots=True)
 class BacktestSpec:
@@ -45,6 +71,8 @@ class BacktestSpec:
     split: dict[str, list[str]] = field(default_factory=dict)
     topk: int = 50
     params: dict[str, Any] = field(default_factory=dict)
+    start_date: str = ""
+    end_date: str = ""
 
 
 @dataclass(slots=True)

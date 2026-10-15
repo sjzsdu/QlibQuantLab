@@ -1,7 +1,8 @@
 """worker 入口：消费应用自己的任务队列并分发 handler。
 
-阶段 2 只交付骨架与分发器；阶段 3 起注册 ``dataset_import`` / ``train`` /
-``backtest`` / ``factor_compute`` handler（跑在独立容器里，API 进程不 import qlib）。
+阶段 3 注册 ``dataset_import`` / ``backtest`` handler（训练在阶段 5）。
+计算实现由 ``COMPUTE_BACKEND`` 决定（qlib 真数据 / stub 合成对照）；
+API 进程永远不 import qlib —— 本模块只在 worker 容器执行。
 """
 
 from __future__ import annotations
@@ -11,22 +12,22 @@ import json
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from qqlab.adapters.compute import build_compute
 from qqlab.config import Settings, load_settings
 from qqlab.container import Container
 from qqlab.core.errors import ValidationAppError
 from qqlab.core.logging import get_logger, setup_logging
-from qqlab.ports.message_queue import Message
+from qqlab.models import JobKind
+from qqlab.ports.message_queue import JOB_QUEUE, Message
+from qqlab.worker.handlers import make_backtest_handler, make_dataset_import_handler
 
 logger = get_logger("qqlab.worker")
 
 Handler = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
 
-#: 阶段 2 默认任务队列（应用自己的 vhost，不是 Qlib-Server 的 task_queue）
-DEFAULT_QUEUE = "qqlab_jobs"
-
 
 class Worker:
-    def __init__(self, settings: Settings, container: Container, *, queue_name: str = DEFAULT_QUEUE) -> None:
+    def __init__(self, settings: Settings, container: Container, *, queue_name: str = JOB_QUEUE) -> None:
         self.settings = settings
         self.container = container
         self.queue_name = queue_name
@@ -79,8 +80,16 @@ class Worker:
                 "queue": self.queue_name,
                 "concurrency": concurrency,
                 "kinds": self.registered_kinds,
+                "compute_backend": self.settings.COMPUTE_BACKEND,
             },
         )
+        if self.settings.COMPUTE_BACKEND == "qlib":
+            # 启动探测：qlib-server 不可达只告警不退出（消费循环继续，
+            # 具体任务会在 run_backtest 里快速失败并把 job 标记 failed —— 见阶段 1 §7）
+            from qqlab.worker.qlib_env import probe_qlib_server  # noqa: PLC0415
+
+            ok, detail = probe_qlib_server(self.settings)
+            logger.info("qlib_server_probe", extra={"ok": ok, "detail": detail})
         await self.container.queue.declare(self.queue_name)
         await self.container.queue.consume(
             self.queue_name,
@@ -94,7 +103,9 @@ def build_worker(settings: Settings | None = None) -> Worker:
     settings = settings or load_settings()
     container = Container.build(settings)
     worker = Worker(settings, container)
-    # 阶段 3 在这里注册：worker.register(JobKind.DATASET_IMPORT, ...)
+    compute = build_compute(settings, container.storage)
+    worker.register(JobKind.DATASET_IMPORT, make_dataset_import_handler(settings, container))
+    worker.register(JobKind.BACKTEST, make_backtest_handler(settings, container, compute))
     return worker
 
 

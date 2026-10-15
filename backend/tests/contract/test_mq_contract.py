@@ -12,7 +12,12 @@ from qqlab.adapters.mq.memory_mq import MemoryMessageQueueProvider
 from qqlab.ports.message_queue import Message, MessageQueueProvider
 
 
-@pytest.fixture(params=["memory"], ids=lambda p: p)
+def _mq_params() -> list[str]:
+    """默认只跑 memory；设置 TEST_MQ_URL 时追加 rabbitmq（可选集成）。"""
+    return ["memory", "rabbitmq"] if os.environ.get("TEST_MQ_URL") else ["memory"]
+
+
+@pytest.fixture(params=_mq_params(), ids=lambda p: p)
 def queue(request) -> MessageQueueProvider:  # noqa: ANN001
     if request.param == "rabbitmq":  # pragma: no cover - 可选集成
         from qqlab.adapters.mq.rabbitmq_mq import RabbitMQProvider

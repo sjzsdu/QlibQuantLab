@@ -23,7 +23,8 @@ def _wrap(delivery: IncomingMessage) -> Message:
         body=bytes(delivery.body),
         routing_key=delivery.routing_key,
         headers=headers,
-        redelivered=delivery.message.redelivered,
+        # IncomingMessage 自身即消息对象（没有 .message 属性）
+        redelivered=bool(delivery.redelivered),
     )
 
 
@@ -74,7 +75,9 @@ class RabbitMQProvider:
     ) -> None:
         channel = await self._ensure()
         await channel.set_qos(prefetch_count=prefetch)
-        declared = await channel.declare_queue(queue, durable=True, auto_ack=False)
+        # aio-pika 的 declare_queue 不接受 auto_ack —— 手动 ack 是 iterator 的默认行为，
+        # ack/nack 在 _one() 里显式调用
+        declared = await channel.declare_queue(queue, durable=True)
         sem = asyncio.Semaphore(max(1, concurrency))
         inflight: set[asyncio.Task] = set()
 
@@ -88,14 +91,23 @@ class RabbitMQProvider:
                 else:
                     await delivery.ack()
 
-        async with declared.iterator(timeout=30) as iterator:
-            async for delivery in iterator:
-                if concurrency <= 1:
-                    await _one(delivery)
-                else:
-                    task = asyncio.create_task(_one(delivery))
-                    inflight.add(task)
-                    task.add_done_callback(inflight.discard)
+        # iterator 的 timeout 是「N 秒无消息则抛 TimeoutError」，不是消费结束 ——
+        # 必须捕获后重建迭代器继续，否则空闲 30 秒就把消费循环打死。
+        # 其它异常（断连/通道关闭）不捕获：向上传播让进程退出、容器按 restart 策略重启。
+        while True:
+            try:
+                async with declared.iterator(timeout=30) as iterator:
+                    async for delivery in iterator:
+                        if concurrency <= 1:
+                            await _one(delivery)
+                        else:
+                            task = asyncio.create_task(_one(delivery))
+                            inflight.add(task)
+                            task.add_done_callback(inflight.discard)
+            except TimeoutError:
+                logger.debug("mq_iterator_idle_timeout", extra={"queue": queue})
+                continue
+            break  # 正常结束（队列删除/连接关闭）
         if inflight:  # pragma: no cover - 循环退出时通常已清空
             await asyncio.gather(*inflight, return_exceptions=True)
 

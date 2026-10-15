@@ -1,6 +1,10 @@
 """统一任务表：jobs / job_logs。
 
 状态机：queued → running → succeeded | failed | canceled（failed 可 retry 回 queued）。
+
+去重语义：只在**活跃态**（queued/running）内对 ``(org_id, payload_hash)`` 唯一 ——
+防的是"同一 payload 重复入队"。终态（succeeded/failed/canceled）不参与唯一约束，
+否则同一 payload 的两个任务都失败时会在 ``mark_failed`` 撞约束（阶段 3 实测踩过）。
 """
 
 from __future__ import annotations
@@ -8,7 +12,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import Uuid
 
@@ -58,7 +62,18 @@ class Job(UUIDPk, TimestampMixin, TenantMixin, Base):
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
-    __table_args__ = (UniqueConstraint("org_id", "payload_hash", "status", name="uq_jobs_org_hash_status"),)
+    __table_args__ = (
+        # 活跃态内去重（queued/running 唯一）；终态不参与，允许同 payload 历史共存。
+        # partial index 同时被 Postgres 与 SQLite 支持（sqlite_where / postgresql_where）。
+        Index(
+            "uq_jobs_org_active_hash",
+            "org_id",
+            "payload_hash",
+            unique=True,
+            postgresql_where=text("status IN ('queued', 'running')"),
+            sqlite_where=text("status IN ('queued', 'running')"),
+        ),
+    )
 
 
 class JobLog(UUIDPk, Base):
