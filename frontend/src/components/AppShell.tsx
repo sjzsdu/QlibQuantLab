@@ -15,6 +15,8 @@ import {
 } from "antd";
 import {
   DashboardOutlined,
+  DatabaseOutlined,
+  ExperimentOutlined,
   FileSearchOutlined,
   FolderOpenOutlined,
   LogoutOutlined,
@@ -54,6 +56,8 @@ export function AppShell({ children }: AppShellProps) {
     () => [
       { key: "/", icon: <DashboardOutlined />, label: "首页" },
       { key: "/projects", icon: <FolderOpenOutlined />, label: "项目管理" },
+      { key: "/data", icon: <DatabaseOutlined />, label: "数据管理" },
+      { key: "/factors", icon: <ExperimentOutlined />, label: "因子库" },
       { key: "/audit", icon: <FileSearchOutlined />, label: "审计日志" },
       {
         key: "legal-group",
@@ -70,7 +74,13 @@ export function AppShell({ children }: AppShellProps) {
     [],
   );
 
-  const selectedKeys = useMemo(() => [pathname], [pathname]);
+  /** 选中高亮：子路由（/data/datasets/{id}）回退到父菜单项 */
+  const selectedKeys = useMemo(() => {
+    if (pathname === "/") return ["/"];
+    const parents = ["/projects", "/data", "/factors", "/audit"];
+    const hit = parents.find((k) => pathname === k || pathname.startsWith(`${k}/`));
+    return [hit ?? pathname];
+  }, [pathname]);
 
   const handleLogout = async () => {
     try {

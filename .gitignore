@@ -26,7 +26,9 @@ out/
 
 # --- 运行期数据 ---
 # 本地对象存储（STORAGE_BACKEND=local）
+# 注意：`data/` 会误伤前端路由目录 frontend/src/app/data/，显式放行
 data/
+!frontend/src/app/data/
 *.db
 *.sqlite3
 

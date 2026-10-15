@@ -138,3 +138,188 @@ export interface SystemInfo {
   auth_provider?: string;
   [key: string]: unknown;
 }
+
+// ------------------------------------------------------------------ 阶段 4：数据域
+export type LicenseStatus = "active" | "revoked";
+
+/** GET /api/v1/data-sources */
+export interface DataSource {
+  id: string;
+  name: string;
+  kind: string;
+  vendor?: string | null;
+  homepage?: string | null;
+  notes?: string | null;
+  status: string;
+  dataset_count: number;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateDataSourceInput {
+  name: string;
+  kind?: string;
+  vendor?: string;
+  homepage?: string;
+  notes?: string;
+}
+
+/** GET /api/v1/data-licenses（授权台账） */
+export interface DataLicense {
+  id: string;
+  data_source_id: string;
+  data_source_name?: string | null;
+  scope: string;
+  license_ref: string;
+  allowed_use: string;
+  redistribution_allowed: boolean;
+  granted_by: string;
+  granted_at?: string | null;
+  expires_at?: string | null;
+  evidence_uri?: string | null;
+  status: LicenseStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateDataLicenseInput {
+  data_source_id: string;
+  license_ref: string;
+  allowed_use: string;
+  redistribution_allowed?: boolean;
+  granted_by: string;
+  expires_at?: string;
+  scope?: string;
+}
+
+export type DatasetStatus = "pending" | "active" | "failed";
+
+/** GET /api/v1/datasets */
+export interface Dataset {
+  id: string;
+  project_id?: string | null;
+  project_name?: string | null;
+  data_source_id: string;
+  data_source_name?: string | null;
+  license_id: string;
+  license_ref?: string | null;
+  name: string;
+  qlib_region: string;
+  freq: string;
+  start_date?: string | null;
+  end_date?: string | null;
+  instrument_count: number;
+  storage_uri: string;
+  status: DatasetStatus;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateDatasetInput {
+  data_source_id: string;
+  license_id: string;
+  name: string;
+  qlib_region?: string;
+  freq?: string;
+  project_id?: string;
+}
+
+/** POST /api/v1/datasets/{id}/import（进度经 /jobs/{job_id} 每 2s 轮询） */
+export interface DatasetImportReceipt {
+  dataset_id: string;
+  job_id: string;
+  status: string;
+}
+
+/** GET /api/v1/datasets/{id}/preview */
+export interface PreviewRow {
+  date: string;
+  values: Record<string, number>;
+}
+
+export interface DatasetPreview {
+  dataset_id: string;
+  instrument: string;
+  fields: string[];
+  items: PreviewRow[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export interface DatasetInstruments {
+  dataset_id: string;
+  items: { instrument: string; display_name: string }[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export interface DatasetCalendar {
+  dataset_id: string;
+  total: number;
+  start?: string | null;
+  end?: string | null;
+}
+
+// ------------------------------------------------------------------ 阶段 4：因子域
+export interface Factor {
+  id: string;
+  project_id: string;
+  project_name?: string | null;
+  name: string;
+  expression: string;
+  factor_type: string;
+  description?: string | null;
+  params: Record<string, unknown>;
+  version: number;
+  visibility: Visibility;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateFactorInput {
+  project_id: string;
+  name: string;
+  expression: string;
+  description?: string;
+}
+
+/** POST /api/v1/factors/validate（静态校验，不落库） */
+export interface ExpressionCheck {
+  valid: boolean;
+  errors: string[];
+  fields: string[];
+  functions: string[];
+}
+
+// ------------------------------------------------------------------ 阶段 4：任务（只读子集）
+export type JobStatus = "queued" | "running" | "succeeded" | "failed" | "canceled";
+
+/** GET /api/v1/jobs / jobs/{id} */
+export interface Job {
+  id: string;
+  kind: string;
+  status: JobStatus;
+  progress: number;
+  attempts: number;
+  max_attempts: number;
+  error?: string | null;
+  payload: Record<string, unknown>;
+  requested_by: string;
+  queued_at?: string | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+  created_at: string;
+}
+
+// ------------------------------------------------------------------ 阶段 4：项目成员
+export interface ProjectMember {
+  user_id: string;
+  username: string;
+  role: string;
+  added_at?: string | null;
+}
