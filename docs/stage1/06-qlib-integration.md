@@ -227,3 +227,82 @@ wsproto<1.2
 - `GET /api/v1/system/info` 返回：`qlib_server_ws_url`（脱敏 host）、`qlib_server_redis_configured`、`qlib_server_queue_configured`、依赖缺失时给出**明确提示**（「Qlib-Server 强依赖 Redis 与 RabbitMQ，两者必须配置，无法通过接口替换」）。
 - worker 启动时做一次 `calendar_request` 连通性探测，失败则退避重试并在 `jobs` 里标 `failed: qlib-server unreachable`。
 - qlib-server 日志里出现的 `session-id`、队列深度写入结构化日志，方便排查重复计算。
+
+## 8. 阶段 3 实测结论（回写）
+
+> 本节在阶段 3 交付时回写；A3-1/A3-3/A3-4 实机 smoke 结论在跑通后**追加到本节末尾**。
+
+### §8.1 版本矩阵核对（决策 #5 落地）
+
+| 端 | Python | pyqlib | socketio | engineio | 备注 |
+|----|--------|--------|----------|----------|------|
+| qlib-server（自建镜像） | 3.10（`ARG BASE_IMAGE` 可切） | 0.9.7 | 4.4.0 | 3.11.2 | flask-socketio 3.1.2 / gevent 22.10.2 / wsproto 1.1.0 |
+| worker（客户端） | 3.11 | 0.9.7 | 4.6.1 | 3.14.2 | EIO3 代际，与 server 同代 |
+| API（backend） | 3.12 | **不含** | — | — | 物理隔离，架构测试断言 |
+
+- server 基座选 3.10 而非 3.11：官方 `setup.py` 硬约束 `gevent<23`，`gevent==22.10.2` 在 cp310 有官方 wheel，cp311 起无 wheel 需源码编译。
+- `requirements.lock` 逐包钉死；`pip install --no-deps` 装 vendored 源码（`0ad527d3`），构建不访问 git。
+
+**pyqlib 0.9.7 wheel 平台矩阵（实测核对）**：PyPI 只发布 `cp{38,39,310,311,312}` × `{manylinux2014_x86_64, macosx_universal2, win_amd64}` —— **无 linux/arm64 wheel，也无 sdist**。因此在 Apple Silicon 上：
+
+- worker 镜像必须 `platform: linux/amd64`（compose 里 `WORKER_PLATFORM` 控制，与 qlib-server 同一约束）；
+- 本机 macOS 直跑 `uv sync --all-extras` 用的是 `macosx_*_universal2` wheel（含 arm64），不受影响。
+
+### §8.2 冲击成本口径（核对结论）
+
+`docs/stage1/06 §4` 的权威公式 `impact = rate_per_million × 成交额` 在阶段 3 **实测核对后固化**：
+
+- `simulator._fee_detail` 用 `amount * cost.impact_rate_per_million`（**不做 /1e6 缩放**）；
+- 单测 `test_every_cost_field_reduces_pnl_vs_zero_cost` 保证该字段与其余五类费用一样 100% 透传。
+
+### §8.3 org_key 租户边界（阶段 3 新增决策）
+
+- `JobRepository.create()` 从 `OrgScope` 注入 `payload["org_key"]`（外部 org 串，如 `dev-org`），并按注入后的 payload 计算 `payload_hash`；
+- worker `run_job` **fail-closed** 校验 `stable_uuid(org_key) == job.org_id`，不一致 → mark_running → mark_failed(detail) → commit → 抛 `ValidationAppError`；
+- 数据目录 `/qlib_data/{org_key}/cn_data` 与对象存储键都以 `org_key` 为租户前缀，与 API 层 `scope.org_id` 同源。
+
+### §8.4 compose 同源约束
+
+- `QLIB_DATA`（qlib-server）必须指向 dump_bin 根：`/qlib_data/{org}/cn_data`，与 worker `data_dir_for()` 完全一致（阶段 3 曾漏 `/cn_data` 后缀，已修复）；
+- RabbitMQ vhost：Qlib-Server 连 `/`，应用默认用户只在 `/qqlab` 有权限 → `rabbitmq-init` 一次性 `set_permissions`（幂等），`qlib-server` depends_on 其 completed；
+- Redis 免密（官方实现不支持密码）→ Docker 内网 + 宿主回环绑定；生产建议分实例。
+
+### §8.5 实机 smoke 回写（2026-10-15，决策 #10）
+
+**A3-1 / A3-2 / A3-3 / A3-4 全部通过**。Apple Silicon（OrbStack amd64 + Rosetta）实测数据：
+
+**启动与性能快照**
+
+| 环节 | 实测值 |
+|------|--------|
+| worker 内 qlib init（client 模式，连 Qlib-Server） | ≈ 2.0s（09:06:38.3 → 09:06:40.3） |
+| 全量取数（3875 标的 × 4943 交易日 × 5 字段，`D.features` 在线模式） | 冷：5m16s；Qlib-Server 内存热数据后：≈ 40s |
+| momentum_scores（3875 标的 × 4943 日，纯 Python） | ≈ 18.6s |
+| 模拟器（13260 笔成交） | ≈ 11s |
+| 曲线上传 + 终态落库 | ≈ 4s |
+
+**官方 zip 数据实测**：196MB → 31008 文件，`instruments=3875`、`calendar=4943 天`（1999-11-10 → 2020-09-25），路径 `/qlib_data/dev-org/cn_data`。Yahoo 采集来源免责声明照官方脚本展示。
+
+**端到端回测 metrics 快照**（job `8d6a6a58`，backtest `90f5f46e`，engine=qlib，topk/lookback 来自 smoke 脚本参数）：
+
+```json
+{
+  "engine": "qlib",
+  "total_return": -1.0, "annualized_return": -1.0, "max_drawdown": -1.0,
+  "sharpe": 0.044, "calmar": -1.0,
+  "trade_count": 13260, "avg_turnover": 0.261,
+  "total_cost": 1172450.76,
+  "cost_applied": {"commission_rate": 0.0003, "min_commission": 5.0,
+                   "slippage": {"type": "fixed_bp", "value": 10.0},
+                   "impact_cost": {"type": "linear", "rate_per_million": 0.0001},
+                   "settlement_fee": 0.00002, "stamp_duty_sell": 0.0005}
+}
+```
+
+- `data_range`：`{start: 1999-11-10, end: 2020-09-25, n_days: 4943, instruments: 3875, freq: day, engine: qlib}`；`limitations` 与 `cost_applied` 齐备；曲线落 `dev-org/backtests/…/curve.csv`。
+- **-100% 是预期结果而非缺陷**：噪声动量（纯规则、无模型）× 日频全换手（日均换手 26%）× 真实费用 → `total_cost`（117 万）超过初始本金（100 万），策略在费用拖累下必然破产。模拟器破产底线（净值 ≤ 0 清零、亏损封顶 -100%）由此实测暴露并修复（见 `docs/stage3/06-risks.md` S3-13/S3-14 与迁移 0003）。这同时验证了费用引擎：结果如实标注了数据区间、参数、费用假设与局限性。
+
+**观察到的良性 warning**（均不影响功能）：
+
+- `Unrecognized config experiment_uri / flask_server / flask_port`：qlib 0.9.7 client 配置区校验告警，初始化与在线连接照常成功（`flask_server=qlib-server, flask_port=9710` 被正确读取）。
+- `WebSocket transport not available. Install gevent-websocket`：Qlib-Server 走 polling 传输，功能正常；生产可加装 gevent-websocket 提升传输性能。

@@ -24,7 +24,7 @@ erDiagram
     datasets ||--o{ models : "trains on"
     models ||--o{ training_runs : "produces"
     projects ||--o{ strategies : "defines"
-    models ||--o{ strategies : "signals from"
+    models |o--o{ strategies : "signals from (optional)"
     strategies ||--o{ backtests : "evaluated by"
     datasets ||--o{ backtests : "tested on"
 
@@ -159,7 +159,7 @@ erDiagram
         uuid org_id FK
         uuid project_id FK
         string name
-        uuid model_id FK
+        uuid model_id FK nullable
         jsonb signal_config
         bool is_public
         int version
@@ -263,6 +263,7 @@ erDiagram
 `factors → models → strategies → backtests`，每一步都保留**输入快照**（`models.factor_snapshot`、`strategies.signal_config`、`backtests.cost_config`），保证结果可复现、可解释。
 
 - `models.training_config`：训练切分（train/valid/test 日期）、模型参数、随机种子。
+- `strategies.model_id` **可空**：纯规则策略（如阶段 3 的 momentum-topk，无模型）为 `NULL`；阶段 5 训练出模型后再绑定（迁移 `0003_strategy_model_optional`）。
 - `strategies.signal_config`：TopK、丢弃规则、空仓处理、信号过滤 —— 是「策略」的唯一事实源。
 - `backtests.cost_config`（**必须显式**）：
 

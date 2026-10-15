@@ -9,8 +9,8 @@
 | 阶段 | 内容 | 状态 |
 |------|------|------|
 | 1 | 架构设计（9 份文档） | ✅ 已确认 → `docs/stage1/` |
-| 2 | 后端骨架 + Mock 认证 + 用户上下文 + 前端骨架 + 双套 Compose | ✅ 已交付，**141 个测试全绿**；`docker compose up` 待实机验收 → `docs/stage2/` |
-| 3 | 打通 Qlib-Server + 最小回测 | ⏳ 待阶段 2 确认 |
+| 2 | 后端骨架 + Mock 认证 + 用户上下文 + 前端骨架 + 双套 Compose | ✅ 已确认 → `docs/stage2/` |
+| 3 | 打通 Qlib-Server + 最小回测 | ⏳ 已交付，**176 个测试全绿**；实机 smoke（A3-1…A3-4）待验收 → `docs/stage3/` |
 | 4 | 项目 / 数据 / 因子 | — |
 | 5 | 训练 → 回测 → 可视化 → 任务中心 | — |
 | 6 | 审计 / 权限 / 合规 / e2e / README 定稿 | — |
@@ -33,8 +33,20 @@ open http://localhost:3000/login # Mock 一键进入
 ```
 
 > - 对象存储默认 `STORAGE_BACKEND=local`（数据落 `objects_data` 卷）。MinIO 挂在 `--profile minio`：当前镜像源不可用，拿到可用源后按 `.env.example` 注释三步恢复。
-> - Qlib 相关服务挂在 `--profile qlib`（阶段 3 交付后才启用）：`docker compose --profile qlib up -d`。
+> - Qlib 链路挂在 `--profile qlib`（阶段 3 起可用，默认不启动）：`docker compose --profile qlib up -d`。
 > - 宿主端口在 `.env` 里用 `HOST_PORT_*` 覆盖（默认 pg 5433 / redis 16379，避开本机常见占用）。
+
+### Qlib 链路（阶段 3，opt-in）
+
+```bash
+# .env：COMPUTE_BACKEND=qlib（默认 stub；首次 smoke 可设 QLIB_DATA_SYMBOLS=50 只取前 50 个标的）
+make qlib-up              # Qlib-Server + rabbitmq-init（vhost 授权）+ 应用栈
+make qlib-data            # 官方 zip 两段式导入（幂等；失败给连通性结论，不换源）
+make qlib-smoke           # L1 WS 握手 → L2 instruments → L3 features 三级连通
+make dataset-import-smoke # 入队数据导入（校验目录 + 登记 data_sources/data_licenses/datasets 台账）
+make backtest-smoke       # 入队最小回测（动量 topk 纯规则；费用三件套 100% 透传）
+docker compose logs -f worker
+```
 
 ### 本机零依赖开发（不起 Docker）
 
@@ -77,18 +89,20 @@ QlibQuantLab/
 │   ├── src/qqlab/
 │   │   ├── ports/        ★ 抽象接口：只依赖标准库
 │   │   ├── adapters/     ★ 具体实现：SDK 只出现在这里（redis/aio_pika/boto3/…）
+│   │   │   └── compute/  计算适配器（worker 专用；stub 合成 / qlib 取数 + 自研模拟器）
 │   │   ├── container.py  ★ 唯一装配点（唯一 import adapters 的地方）
 │   │   ├── api/ services/ repositories/ models/ core/ schemas/
-│   │   └── worker/       独立任务进程（qlib 只允许在 worker/qlib_env.py）
+│   │   └── worker/       独立任务进程（qlib 只允许在 worker/qlib_env.py + adapters/compute/qlib_compute.py）
 │   ├── alembic/          0001：一次建全 17 张表 + 种子
-│   └── tests/            architecture · unit · contract · api · integration（141 用例）
+│   └── tests/            architecture · unit · contract · api · integration（176 用例）
 ├── frontend/         Next.js 15 + TS + AntD 5 + TanStack Query（pnpm）
 ├── docs/stage1/      架构设计（9 份，阶段基准）
-├── docs/stage2/      本阶段交付文档（目标/文件树/代码/启动/测试/风险/验收）
-├── docker-compose.yml       模式 A · 自包含
+├── docs/stage2/      阶段 2 交付文档
+├── docs/stage3/      阶段 3 交付文档（Qlib-Server + 最小回测）
+├── docker-compose.yml       模式 A · 自包含（qlib 链路挂 --profile qlib）
 ├── docker-compose.prod.yml  模式 B · 复用外部依赖 + Traefik
 ├── .env.example · Makefile · scripts/
-└── qlib-server/ · deploy/ · LICENSE   # 阶段 3 / 阶段 7 交付
+└── qlib-server/      Qlib-Server 自建镜像（vendored 源码 + 依赖锁定 + 启动时配置渲染）
 ```
 
 ## 架构速览
@@ -105,12 +119,12 @@ QlibQuantLab/
 
 **统一响应信封**：`{ code, message, data, request_id }`，`request_id` 同时出现在响应头 `X-Request-ID`、结构化日志与 `audit_logs`，可三方串联。非安全方法强制双提交 CSRF（`qqlab_csrf` cookie + `X-CSRF-Token` 头）。
 
-**Qlib 边界**：`qlib` 是进程单例且依赖 Redis + RabbitMQ（Qlib-Server 硬依赖、Redis 无密码），因此 Web 进程只作为 **WebSocket 客户端**连 Qlib-Server，训练/回测在独立 `worker` 容器执行（`QLIB_WORKER_CONCURRENCY=1`）。
+**Qlib 边界**：`qlib` 是进程单例且依赖 Redis + RabbitMQ（Qlib-Server 硬依赖、Redis 无密码），因此 Web 进程只作为 **WebSocket 客户端**连 Qlib-Server，训练/回测在独立 `worker` 容器执行（`QLIB_WORKER_CONCURRENCY=1`）。API 镜像（Python 3.12）**物理不含 qlib**；worker 镜像（Python 3.11 + `--extra qlib`）是全仓唯一 import qlib 的进程，架构测试 + 单测双重断言。计算口径由自研最小模拟器统一（qlib 只取数），`COMPUTE_BACKEND=qlib|stub` 切换不影响费用模型。
 
 ## 测试
 
 ```bash
-cd backend && uv run pytest -q        # 141 passed，<3s，零外部依赖
+cd backend && uv run pytest -q        # 176 passed，<5s，零外部依赖
 uv run ruff check .                   # All checks passed
 # 真实后端契约（可选，需本地服务；redis 端口按默认 HOST_PORT_REDIS=16379，用外部实例就改成实际值）
 TEST_REDIS_URL=redis://localhost:16379/9 uv run pytest tests/contract -q
@@ -121,7 +135,8 @@ TEST_REDIS_URL=redis://localhost:16379/9 uv run pytest tests/contract -q
 ## 文档
 
 - `docs/stage1/` — 架构、目录、数据模型、API 与认证、端口与适配器、Qlib 集成、部署、风险与路线图
-- `docs/stage2/` — 本阶段：目标 / 文件树 / 代码 / 启动命令 / 测试方法 / 已知风险 / 验收清单
+- `docs/stage2/` — 阶段 2：目标 / 文件树 / 代码 / 启动命令 / 测试方法 / 已知风险 / 验收清单
+- `docs/stage3/` — 阶段 3：Qlib-Server 自建镜像、worker 计算链、部署与 smoke、验收清单
 - 阶段 1 风险登记册与七阶段路线图见 `docs/stage1/08-risks-and-roadmap.md`
 
 ## License
