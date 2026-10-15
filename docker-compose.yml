@@ -1,0 +1,235 @@
+# docker-compose.yml —— 模式 A：一键起全套依赖（不含 Casdoor、不含 Traefik）
+#
+#   cp .env.example .env
+#   docker compose up -d --build      # 默认 7 个服务：frontend backend worker migrate postgres redis rabbitmq
+#
+# 应用层完全不感知反向代理：本文件里没有 Traefik，也不引用任何外部网络。
+# 两个可选 profile：
+#   --profile minio  对象存储 MinIO（当前环境拉不到镜像，默认用 STORAGE_BACKEND=local 兜底）
+#   --profile qlib   Qlib-Server 与数据导入（构建上下文与脚本由阶段 3 交付）
+
+name: qqlab
+
+# 后端/worker/迁移共用同一镜像与同一份 .env，只有 command 不同
+x-backend: &backend
+  build:
+    context: ./backend
+    target: ${DOCKER_TARGET:-dev}
+  env_file: [.env]
+  networks: [qqlab]
+  restart: unless-stopped
+
+services:
+  # ---------------------------------------------------------------- 前端
+  frontend:
+    build:
+      context: ./frontend
+      target: dev
+    command: pnpm dev --hostname 0.0.0.0 --port 3000
+    working_dir: /app
+    volumes:
+      - ./frontend:/app
+      - frontend_node_modules:/app/node_modules
+    ports: ["${HOST_PORT_WEB:-3000}:3000"]
+    environment:
+      BACKEND_INTERNAL_URL: http://backend:8000
+      NEXT_PUBLIC_API_BASE: /api
+    depends_on:
+      backend: {condition: service_healthy}
+    networks: [qqlab]
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------- 后端 API（不 import qlib）
+  backend:
+    <<: *backend
+    command: uvicorn qqlab.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir /app/src
+    volumes:
+      - ./backend:/app
+      - backend_venv:/app/.venv
+      - objects_data:/data/objects # STORAGE_BACKEND=local 时的对象数据，重建容器不丢
+    ports: ["${HOST_PORT_API:-8000}:8000"]
+    environment:
+      IS_WORKER: "false"
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      rabbitmq: {condition: service_healthy}
+      migrate: {condition: service_completed_successfully}
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request;urllib.request.urlopen('http://localhost:8000/api/v1/health/live')",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+
+  # ---------------------------------------------------------------- 任务 worker（唯一 import qlib 的进程）
+  # 阶段 3 起注册 dataset_import / train / backtest handler；
+  # qlib 是进程单例 → QLIB_WORKER_CONCURRENCY=1（.env 里设定）。
+  worker:
+    <<: *backend
+    command: qqlab-worker
+    environment:
+      IS_WORKER: "true"
+    volumes:
+      - ./backend:/app
+      - backend_venv:/app/.venv
+      - qlib_data:/qlib_data
+      - experiments:/experiments
+      - objects_data:/data/objects # 阶段 3 起 worker 也可能落对象（与 backend 共用）
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      rabbitmq: {condition: service_healthy}
+      migrate: {condition: service_completed_successfully}
+    # 阶段 3 补：qlib-server: {condition: service_healthy}
+
+  # ---------------------------------------------------------------- 一次性数据库迁移
+  migrate:
+    <<: *backend
+    command: alembic upgrade head
+    restart: "no"
+    depends_on:
+      postgres: {condition: service_healthy}
+
+  # ---------------------------------------------------------------- Qlib 在线服务（硬依赖 Redis + RabbitMQ）
+  # 阶段 3 交付 ./qlib-server 构建上下文后启用；默认 profile 不启动，避免阶段 2 构建失败。
+  qlib-server:
+    profiles: ["qlib"]
+    build:
+      context: ./qlib-server
+    platform: ${QLIB_SERVER_PLATFORM:-linux/amd64} # Apple Silicon 走 Rosetta；arm64 自建镜像后置空
+    env_file: [.env]
+    environment:
+      QUEUE_HOST: ${QLIB_SERVER_QUEUE_HOST:-rabbitmq}
+      QUEUE_USER: ${RABBITMQ_DEFAULT_USER}
+      QUEUE_PASS: ${RABBITMQ_DEFAULT_PASS}
+      REDIS_HOST: ${QLIB_SERVER_REDIS_HOST:-redis}
+      REDIS_PORT: ${QLIB_SERVER_REDIS_PORT:-6379}
+      REDIS_DB: ${QLIB_SERVER_REDIS_DB:-0}
+      MESSAGE_QUEUE: ${QLIB_SERVER_MESSAGE_QUEUE:-message_queue}
+      TASK_QUEUE: ${QLIB_SERVER_TASK_QUEUE:-task_queue}
+      FLASK_SERVER_HOST: 0.0.0.0
+      QLIB_DATA: /qlib_data/${MOCK_ORG_ID:-dev-org}
+    volumes:
+      - qlib_data:/qlib_data
+    ports: ["${HOST_PORT_QLIB:-9710}:9710"]
+    networks: [qqlab]
+    depends_on:
+      rabbitmq: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import socket;socket.create_connection(('127.0.0.1',9710),3)\""]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 60s
+    restart: unless-stopped
+
+  # 一次性数据导入（Yahoo 下载 → dump_bin），阶段 3 交付脚本后可用：
+  #   docker compose --profile qlib run --rm qlib-bootstrap
+  qlib-bootstrap:
+    profiles: ["qlib"]
+    build:
+      context: ./qlib-server
+    env_file: [.env]
+    command: ["/scripts/bootstrap_qlib_data.sh"]
+    volumes:
+      - qlib_data:/qlib_data
+      - ./scripts:/scripts:ro
+    networks: [qqlab]
+    restart: "no"
+
+  # ---------------------------------------------------------------- 基础设施（模式 A）
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes: [pg_data:/var/lib/postgresql/data]
+    # 宿主端口只绑回环；默认避开本机已有的 5432，可用 HOST_PORT_PG 覆盖。容器内恒为 postgres:5432。
+    ports: ["127.0.0.1:${HOST_PORT_PG:-5433}:5432"]
+    networks: [qqlab]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  # 应用缓存 + Qlib-Server 硬依赖共用一个实例（分 db 隔离：应用 db5 / Qlib-Server db0）。
+  # 刻意不设密码：Qlib-Server 官方实现不支持 Redis 密码（阶段 1 风险 R11），
+  # 靠 Docker 内网 + 宿主端口只绑回环保护。模式 B 建议两者分开实例。
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes: [redis_data:/data]
+    # 宿主端口只绑回环；默认避开本机已有的 6379，可用 HOST_PORT_REDIS 覆盖。容器内恒为 redis:6379。
+    ports: ["127.0.0.1:${HOST_PORT_REDIS:-16379}:6379"]
+    networks: [qqlab]
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS}
+      # 应用默认 vhost = /qqlab（与 MQ_URL 的 %2Fqqlab 对齐）。
+      # 阶段 3 注意：默认用户只在默认 vhost 上有权限，而 Qlib-Server 用的是 /，
+      # 启用 qlib profile 时需要补一条授权：
+      #   docker compose exec rabbitmq rabbitmqctl set_permissions -p / qqlab '.*' '.*' '.*'
+      RABBITMQ_DEFAULT_VHOST: /qqlab
+    volumes: [rabbit_data:/var/lib/rabbitmq]
+    ports: ["${HOST_PORT_AMQP:-5672}:5672", "${HOST_PORT_AMQP_MGMT:-15672}:15672"]
+    networks: [qqlab]
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 10s
+      retries: 20
+    restart: unless-stopped
+
+  # 对象存储 MinIO：挂到 `minio` profile，默认 up 不启动（当前环境无可用 minio 镜像源，
+  # 核心链路用 STORAGE_BACKEND=local 兜底）。镜像源恢复后：
+  #   .env 改 STORAGE_BACKEND=minio → docker compose --profile minio up -d minio
+  # 注意：minio 服务必须显式挂 qqlab 网络，否则 backend 解析不到 minio 主机名。
+  minio:
+    profiles: ["minio"]
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    volumes: [minio_data:/data]
+    ports: ["${HOST_PORT_S3:-9000}:9000", "${HOST_PORT_S3_CONSOLE:-9001}:9001"]
+    networks: [qqlab]
+    restart: unless-stopped
+    # 故意不写 healthcheck：minio 官方镜像内既无 mc 也无 curl，写死命令只会永远 unhealthy。
+    # 验证方式（宿主机）：curl -sf http://localhost:9000/minio/health/live
+    # bucket 由 backend 的 S3StorageProvider.ping() 惰性创建（head_bucket → create_bucket），
+    # 因此不再需要独立的 minio/mc 初始化容器（该镜像已从 Docker Hub 移除）。
+
+networks:
+  qqlab: {driver: bridge}
+
+volumes:
+  pg_data:
+  redis_data:
+  rabbit_data:
+  minio_data:
+  qlib_data:
+  experiments:
+  objects_data:
+  backend_venv:
+  frontend_node_modules:

@@ -1,0 +1,122 @@
+# docker-compose.prod.yml —— 模式 B：只部署应用，基础设施与 Traefik/Casdoor 复用用户已有的
+#
+#   docker compose -f docker-compose.prod.yml up -d --build
+#
+# 与模式 A 的差异：
+#   · 不起 postgres / redis / rabbitmq / minio —— 地址全部由 .env 指向外部实例
+#   · 前端走 next build + standalone，后端走 runtime 镜像（非 root）
+#   · Traefik 只出现在本文件的 labels 里，应用层零感知
+#   · 首次部署前先跑一次迁移：docker compose -f docker-compose.prod.yml run --rm migrate
+
+name: qqlab-prod
+
+x-prod: &prod
+  env_file: [.env]
+  restart: always
+  networks: [traefik, internal]
+  labels:
+    - "traefik.enable=true"
+
+services:
+  # ---------------------------------------------------------------- 前端
+  frontend:
+    build:
+      context: ./frontend
+      # 默认最后阶段 runner：仅含 standalone 产物，非 root 运行
+      args:
+        BACKEND_INTERNAL_URL: http://backend:8000 # 构建期注入 rewrites 目标
+    <<: *prod
+    environment:
+      NEXT_PUBLIC_API_BASE: /api
+    depends_on:
+      backend: {condition: service_healthy}
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.qqlab-web.rule=Host(`${TRAEFIK_HOST_WEB}`)"
+      - "traefik.http.routers.qqlab-web.entrypoints=websecure"
+      - "traefik.http.routers.qqlab-web.tls.certresolver=${TRAEFIK_CERT_RESOLVER}"
+      - "traefik.http.services.qqlab-web.loadbalancer.server.port=3000"
+
+  # ---------------------------------------------------------------- 后端 API
+  backend:
+    build:
+      context: ./backend
+      target: runtime
+    <<: *prod
+    command: uvicorn qqlab.main:app --host 0.0.0.0 --port 8000 --workers ${BACKEND_WORKERS:-4}
+    environment:
+      IS_WORKER: "false"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.qqlab-api.rule=Host(`${TRAEFIK_HOST_API}`)"
+      - "traefik.http.routers.qqlab-api.entrypoints=websecure"
+      - "traefik.http.routers.qqlab-api.tls.certresolver=${TRAEFIK_CERT_RESOLVER}"
+      - "traefik.http.services.qqlab-api.loadbalancer.server.port=8000"
+      - "traefik.http.routers.qqlab-api.middlewares=sec-headers"
+      - "traefik.http.middlewares.sec-headers.headers.stsSeconds=31536000"
+      - "traefik.http.middlewares.sec-headers.headers.contentTypeNosniff=true"
+      - "traefik.http.middlewares.sec-headers.headers.frameDeny=true"
+      - "traefik.http.middlewares.ratelimit.ratelimit.average=100"
+      - "traefik.http.middlewares.ratelimit.ratelimit.burst=50"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request;urllib.request.urlopen('http://localhost:8000/api/v1/health/live')",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  # ---------------------------------------------------------------- 任务 worker（唯一 import qlib 的进程）
+  worker:
+    build:
+      context: ./backend
+      target: runtime
+    <<: *prod
+    command: qqlab-worker
+    environment:
+      IS_WORKER: "true"
+    labels:
+      - "traefik.enable=false"
+
+  # ---------------------------------------------------------------- 一次性迁移（部署时手动跑一次）
+  migrate:
+    build:
+      context: ./backend
+      target: runtime
+    <<: *prod
+    command: alembic upgrade head
+    restart: "no"
+    labels:
+      - "traefik.enable=false"
+
+  # ---------------------------------------------------------------- Qlib 在线服务（阶段 3 起启用，挂 qlib profile）
+  qlib-server:
+    profiles: ["qlib"]
+    build:
+      context: ./qlib-server
+    <<: *prod
+    # WebSocket 需要长连接：升级头 + passHostHeader + 无响应超时 + sticky（socket.io 轮询回退）
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.qqlib.rule=Host(`${TRAEFIK_HOST_QLIB}`)"
+      - "traefik.http.routers.qqlib.entrypoints=websecure"
+      - "traefik.http.routers.qqlib.tls.certresolver=${TRAEFIK_CERT_RESOLVER}"
+      - "traefik.http.services.qqlib.loadbalancer.server.port=9710"
+      - "traefik.http.services.qqlib.loadbalancer.passHostHeader=true"
+      - "traefik.http.services.qqlib.loadbalancer.responseForwarding.flushInterval=1ms"
+      - "traefik.http.services.qqlib.loadbalancer.sticky.cookie=true"
+      - "traefik.http.middlewares.qqlib-ws.headers.customRequestHeaders.Connection=upgrade"
+      - "traefik.http.middlewares.qqlib-ws.headers.customRequestHeaders.Upgrade=websocket"
+      - "traefik.http.routers.qqlib.middlewares=qqlib-ws"
+
+networks:
+  traefik:
+    external: true
+    name: ${EXTERNAL_TRAEFIK_NETWORK}
+  internal:
+    internal: true # 业务容器不出网，只经 Traefik 暴露

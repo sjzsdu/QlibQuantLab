@@ -1,0 +1,38 @@
+# --- 环境与密钥（真实值永不入库；.env.example 才入库）---
+.env
+.env.*
+!.env.example
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+coverage.xml
+htmlcov/
+dist/
+build/
+
+# --- Node ---
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+
+# --- 运行期数据 ---
+# 本地对象存储（STORAGE_BACKEND=local）
+data/
+*.db
+*.sqlite3
+
+# --- 日志与编辑器 ---
+*.log
+logs/
+.DS_Store
+.idea/
+.vscode/
