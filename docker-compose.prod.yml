@@ -72,10 +72,13 @@ services:
       start_period: 20s
 
   # ---------------------------------------------------------------- 任务 worker（唯一 import qlib 的进程）
+  # 阶段 3：worker 走独立镜像链（Python 3.11 + qlib extra）—— runtime（3.12）不含 qlib。
+  # platform 锁 amd64：pyqlib 0.9.7 无 arm64 wheel（与开发 compose 同一约束）。
   worker:
     build:
       context: ./backend
-      target: runtime
+      target: worker-runtime
+    platform: ${WORKER_PLATFORM:-linux/amd64}
     <<: *prod
     command: qqlab-worker
     environment:

@@ -1,7 +1,8 @@
 # QlibQuantLab 常用命令入口
 # 用法：make help
 
-.PHONY: help env install dev dev-logs dev-down ps build migrate test test-backend test-frontend lint format smoke clean
+.PHONY: help env install dev dev-logs dev-down ps build migrate test test-backend test-frontend lint format smoke clean \
+        qlib-up qlib-data qlib-smoke backtest-smoke dataset-import-smoke
 
 help: ## 列出所有命令
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
@@ -51,6 +52,22 @@ smoke: ## 打健康检查（需先 make dev）
 	curl -s localhost:8000/api/v1/health/ready
 	curl -s localhost:3000/api/v1/health/live
 	curl -s localhost:3000/api/v1/me
+
+# ---------------------------------------------------------------- 阶段 3 · Qlib 链路（opt-in）
+qlib-up: env ## 起 Qlib-Server + rabbitmq-init（vhost 授权）+ 应用栈
+	docker compose --profile qlib up -d --build
+
+qlib-data: ## 导入 qlib 数据（官方 zip 两段式；幂等，已存在则跳过）
+	docker compose --profile qlib run --rm qlib-bootstrap
+
+qlib-smoke: ## Qlib-Server 连通性 smoke（L1 WS → L2 instruments → L3 features）
+	docker compose --profile qlib run --rm worker python /scripts/qlib_connectivity_smoke.py
+
+backtest-smoke: ## 入队最小回测（先跑 qlib-data；worker 消费后 logs -f worker 观测）
+	docker compose exec backend python /scripts/enqueue_backtest_smoke.py backtest
+
+dataset-import-smoke: ## 入队数据导入任务（校验目录 + 登记台账；worker 消费）
+	docker compose exec backend python /scripts/enqueue_backtest_smoke.py dataset_import
 
 clean: ## 清理缓存与构建产物
 	find backend -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true

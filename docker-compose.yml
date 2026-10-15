@@ -1,12 +1,13 @@
 # docker-compose.yml —— 模式 A：一键起全套依赖（不含 Casdoor、不含 Traefik）
 #
 #   cp .env.example .env
-#   docker compose up -d --build      # 默认 7 个服务：frontend backend worker migrate postgres redis rabbitmq
+#   docker compose up -d --build      # 默认 8 个服务：frontend backend worker migrate postgres redis rabbitmq
 #
 # 应用层完全不感知反向代理：本文件里没有 Traefik，也不引用任何外部网络。
 # 两个可选 profile：
 #   --profile minio  对象存储 MinIO（当前环境拉不到镜像，默认用 STORAGE_BACKEND=local 兜底）
-#   --profile qlib   Qlib-Server 与数据导入（构建上下文与脚本由阶段 3 交付）
+#   --profile qlib   Qlib-Server + rabbitmq-init（vhost 授权）+ qlib-bootstrap（数据导入）
+#                    （决策 #1：qlib 链路保持 opt-in，绝不进默认 up）
 
 name: qqlab
 
@@ -47,6 +48,7 @@ services:
       - ./backend:/app
       - backend_venv:/app/.venv
       - objects_data:/data/objects # STORAGE_BACKEND=local 时的对象数据，重建容器不丢
+      - ./scripts:/scripts:ro # 阶段 3：入队 smoke 脚本在容器内执行（走 compose 内网）
     ports: ["${HOST_PORT_API:-8000}:8000"]
     environment:
       IS_WORKER: "false"
@@ -69,31 +71,48 @@ services:
       start_period: 15s
 
   # ---------------------------------------------------------------- 任务 worker（唯一 import qlib 的进程）
-  # 阶段 3 起注册 dataset_import / train / backtest handler；
+  # 阶段 3：注册 dataset_import / backtest handler（train 在阶段 5）；
   # qlib 是进程单例 → QLIB_WORKER_CONCURRENCY=1（.env 里设定）。
+  # 镜像链独立（dev-worker / worker-runtime，Python 3.11 + qlib extra），
+  # venv 卷也与 API 分开（worker_venv 是 3.11，backend_venv 是 3.12，绝不共用）。
+  # platform 锁 amd64：pyqlib 0.9.7 只发布了 manylinux2014_x86_64 wheel（无 arm64、无 sdist），
+  # Apple Silicon 上必须走 Rosetta 构建与运行（与 qlib-server 同一约束）。
+  # 不写 depends_on qlib-server：qlib 在 opt-in profile 里，默认 up 不启动它；
+  # COMPUTE_BACKEND=stub（默认）不触网，COMPUTE_BACKEND=qlib 时连接失败会显式报错。
   worker:
-    <<: *backend
+    build:
+      context: ./backend
+      target: ${WORKER_DOCKER_TARGET:-dev-worker}
+    platform: ${WORKER_PLATFORM:-linux/amd64}
     command: qqlab-worker
+    env_file: [.env]
     environment:
       IS_WORKER: "true"
+    networks: [qqlab]
+    restart: unless-stopped
     volumes:
       - ./backend:/app
-      - backend_venv:/app/.venv
+      - worker_venv:/app/.venv
       - qlib_data:/qlib_data
       - experiments:/experiments
       - objects_data:/data/objects # 阶段 3 起 worker 也可能落对象（与 backend 共用）
+      - ./scripts:/scripts:ro # 阶段 3：连通性 smoke 在 worker 容器内跑（有 socketio）
     depends_on:
       postgres: {condition: service_healthy}
       redis: {condition: service_healthy}
       rabbitmq: {condition: service_healthy}
       migrate: {condition: service_completed_successfully}
-    # 阶段 3 补：qlib-server: {condition: service_healthy}
 
   # ---------------------------------------------------------------- 一次性数据库迁移
   migrate:
     <<: *backend
     command: alembic upgrade head
     restart: "no"
+    # 与 backend 一致挂载工作树：dev 下迁移必须跟 alembic/versions 同步，
+    # 否则跑的是镜像烤入的旧 revision（实测：DB 已到 0003 而镜像只认 0001/0002 → "Can't locate revision"）
+    volumes:
+      - ./backend:/app
+      - backend_venv:/app/.venv
     depends_on:
       postgres: {condition: service_healthy}
 
@@ -101,6 +120,9 @@ services:
   # 阶段 3 交付 ./qlib-server 构建上下文后启用；默认 profile 不启动，避免阶段 2 构建失败。
   qlib-server:
     profiles: ["qlib"]
+    # 与 qlib-bootstrap 共享同一镜像（同一 build context / runtime stage），
+    # 避免 compose 按服务名派生出两个独立镜像导致重复 pip install（撞 PyPI 抖动）。
+    image: qqlab-qlib-server:latest
     build:
       context: ./qlib-server
     platform: ${QLIB_SERVER_PLATFORM:-linux/amd64} # Apple Silicon 走 Rosetta；arm64 自建镜像后置空
@@ -115,13 +137,17 @@ services:
       MESSAGE_QUEUE: ${QLIB_SERVER_MESSAGE_QUEUE:-message_queue}
       TASK_QUEUE: ${QLIB_SERVER_TASK_QUEUE:-task_queue}
       FLASK_SERVER_HOST: 0.0.0.0
-      QLIB_DATA: /qlib_data/${MOCK_ORG_ID:-dev-org}
+      # provider_uri 必须指向 dump_bin 根（含 calendars/instruments/features）——
+      # 即 {org 目录}/cn_data，与 worker 的 data_dir_for() 完全一致，否则 D.features 取不到数
+      QLIB_DATA: /qlib_data/${MOCK_ORG_ID:-dev-org}/cn_data
+      REGION: ${QLIB_REGION:-cn}
     volumes:
       - qlib_data:/qlib_data
     ports: ["${HOST_PORT_QLIB:-9710}:9710"]
     networks: [qqlab]
     depends_on:
       rabbitmq: {condition: service_healthy}
+      rabbitmq-init: {condition: service_completed_successfully}
       redis: {condition: service_healthy}
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import socket;socket.create_connection(('127.0.0.1',9710),3)\""]
@@ -135,13 +161,76 @@ services:
   #   docker compose --profile qlib run --rm qlib-bootstrap
   qlib-bootstrap:
     profiles: ["qlib"]
-    build:
-      context: ./qlib-server
+    # 复用 qlib-server 镜像（同一 build context），不单独构建；只需它自带的 pyqlib 去跑 GetData
+    image: qqlab-qlib-server:latest
+    platform: ${QLIB_SERVER_PLATFORM:-linux/amd64}
     env_file: [.env]
-    command: ["/scripts/bootstrap_qlib_data.sh"]
+    # 镜像 ENTRYPOINT 是 main.py（qlib-server），跑 bootstrap 必须覆盖 entrypoint
+    entrypoint: ["bash", "/scripts/bootstrap_qlib_data.sh"]
+    command: []
     volumes:
       - qlib_data:/qlib_data
       - ./scripts:/scripts:ro
+    networks: [qqlab]
+    restart: "no"
+
+  # 一次性授权：RABBITMQ_DEFAULT_VHOST=/qqlab（应用自己的队列），vhost / 默认不存在，
+  # 而 vendored Qlib-Server 的 pika 连接硬编码默认 vhost /（utils.py 不支持 vhost 参数）。
+  # 不改官方实现（vendored 源码保持与上游一致），用这条一次性授权补齐（阶段 3 决策）：
+  #   PUT /api/vhosts/%2F（创建 /，幂等）→ PUT /api/permissions/%2F/{user} → GET 验证。
+  # 走 management HTTP API 而非 rabbitmqctl：跨容器 rabbitmqctl 因 Erlang cookie/nodename
+  # 无法连接（实测 exit 69）；API 路径用同镜像自带 python3，不引入新镜像。
+  # 幂等：重复执行无副作用；rabbitmq-init 完成后 qlib-server 才启动。
+  rabbitmq-init:
+    profiles: ["qlib"]
+    image: rabbitmq:3.13-management-alpine
+    depends_on:
+      rabbitmq: {condition: service_healthy}
+    environment:
+      MQ_USER: ${RABBITMQ_DEFAULT_USER}
+      MQ_PASS: ${RABBITMQ_DEFAULT_PASS}
+      MQ_MGMT: http://rabbitmq:15672
+    command:
+      - sh
+      - -c
+      - |
+        python3 - <<'PY'
+        import base64, json, os, time, urllib.error, urllib.parse, urllib.request
+
+        user = os.environ["MQ_USER"]
+        pw = os.environ["MQ_PASS"]
+        base = os.environ.get("MQ_MGMT", "http://rabbitmq:15672")
+        auth = "Basic " + base64.b64encode(f"{user}:{pw}".encode()).decode()
+
+        def call(method, path, body=None):
+            req = urllib.request.Request(
+                base + path,
+                method=method,
+                data=json.dumps(body).encode() if body is not None else None,
+                headers={"Content-Type": "application/json", "Authorization": auth},
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                return resp.status
+
+        quser = urllib.parse.quote(user, safe="")
+        last = None
+        for i in range(30):
+            try:
+                print("create vhost / ->", call("PUT", "/api/vhosts/%2F", {}))
+                print("grant on / ->", call(
+                    "PUT", f"/api/permissions/%2F/{quser}",
+                    {"configure": ".*", "write": ".*", "read": ".*"},
+                ))
+                print("verify ->", call("GET", f"/api/permissions/%2F/{quser}"))
+                raise SystemExit(0)
+            except SystemExit:
+                raise
+            except (urllib.error.URLError, OSError, TimeoutError) as exc:
+                last = exc
+                print(f"retry {i}: {exc}")
+                time.sleep(2)
+        raise SystemExit(f"rabbitmq-init failed: cannot grant vhost / permissions: {last}")
+        PY
     networks: [qqlab]
     restart: "no"
 
@@ -231,5 +320,6 @@ volumes:
   qlib_data:
   experiments:
   objects_data:
-  backend_venv:
+  backend_venv: # API 侧（Python 3.12）
+  worker_venv: # worker 侧（Python 3.11 + qlib）—— 与 API 分开，避免解释器串味
   frontend_node_modules:
