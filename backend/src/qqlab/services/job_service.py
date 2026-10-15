@@ -14,6 +14,9 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING
 
+from sqlalchemy.exc import IntegrityError
+
+from qqlab.core.errors import ConflictError
 from qqlab.ports.message_queue import JOB_QUEUE
 from qqlab.repositories.job import JobRepository
 
@@ -45,13 +48,17 @@ class JobService:
         返回 job id。``payload`` 无需包含 ``org_key``（repository 从 scope 注入）。
         """
         async with self._container.database.session() as session:
-            job = await JobRepository(session, self._scope).create(
-                kind=kind,
-                payload=payload,
-                project_id=project_id,
-                requested_by=requested_by,
-                max_attempts=max_attempts,
-            )
+            try:
+                job = await JobRepository(session, self._scope).create(
+                    kind=kind,
+                    payload=payload,
+                    project_id=project_id,
+                    requested_by=requested_by,
+                    max_attempts=max_attempts,
+                )
+            except IntegrityError as exc:
+                # 活跃态 (org_id, payload_hash) 部分唯一索引拦截重复入队 → 409
+                raise ConflictError("相同任务已在队列中（queued/running），请等待其完成") from exc
             job_id = str(job.id)
         # session 退出即 commit —— 行先于消息可见
         body = json.dumps({"kind": kind, "job_id": job_id}, ensure_ascii=False).encode("utf-8")

@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter
 
-from qqlab.api.v1 import admin, audit, auth, health, legal, me, orgs, projects
+from qqlab.api.v1 import admin, audit, auth, data, factors, health, jobs, legal, me, orgs, projects
 
 v1_router = APIRouter()
 for _router in (
@@ -14,6 +14,9 @@ for _router in (
     projects.router,
     admin.router,
     audit.router,
+    data.router,
+    factors.router,
+    jobs.router,
 ):
     v1_router.include_router(_router)
 

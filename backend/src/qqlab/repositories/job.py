@@ -84,6 +84,31 @@ class JobRepository(BaseRepository):
             stmt = stmt.where(Job.kind == kind)
         return int((await self.session.execute(stmt)).scalar_one())
 
+    async def list(
+        self,
+        *,
+        page: int = 1,
+        page_size: int = 20,
+        kind: str | None = None,
+        status: str | None = None,
+    ) -> tuple[list[Job], int]:
+        """分页列举任务（阶段 4 只读子集；供 UI 轮询导入进度）。"""
+        offset, limit = self.page_offsets(page, page_size)
+        stmt = self._base()
+        if kind:
+            stmt = stmt.where(Job.kind == kind)
+        if status:
+            stmt = stmt.where(Job.status == status)
+        total = int(
+            (await self.session.execute(select(func.count()).select_from(stmt.subquery()))).scalar_one()
+        )
+        rows = (
+            (await self.session.execute(stmt.order_by(Job.created_at.desc()).offset(offset).limit(limit)))
+            .scalars()
+            .all()
+        )
+        return list(rows), total
+
     async def mark_running(self, job_id: str | uuid.UUID) -> bool:
         """queued → running 的比较并交换（attempts 自增，带心跳时间）。"""
         job = await self.get(job_id)

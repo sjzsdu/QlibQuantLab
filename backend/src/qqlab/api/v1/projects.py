@@ -1,4 +1,4 @@
-"""项目 CRUD（阶段 2 范围：为阶段 4 打底，同时验证租户隔离）。"""
+"""项目 CRUD 与成员/可见性管理（阶段 2 打底 + 阶段 4 补全）。"""
 
 from __future__ import annotations
 
@@ -13,7 +13,14 @@ from qqlab.api.deps import (
 from qqlab.core.errors import ConfirmationRequiredError
 from qqlab.core.tenant import OrgScope
 from qqlab.ports.auth import CurrentUser
-from qqlab.schemas import OkOut, ProjectCreateIn, ProjectUpdateIn
+from qqlab.schemas import (
+    OkOut,
+    ProjectCreateIn,
+    ProjectMemberAddIn,
+    ProjectMemberOut,
+    ProjectUpdateIn,
+    VisibilityChangeIn,
+)
 from qqlab.services import AuditContext, ProjectService
 
 router = APIRouter(prefix="/projects", tags=["projects"])
@@ -97,3 +104,66 @@ async def delete_project(
     service = _service(request, session, user, ctx)
     deleted_id = await service.delete(project_id, confirm=confirm)
     return success(request, OkOut(deleted=True, id=deleted_id).model_dump(), message="项目已删除")
+
+
+# ----------------------------------------------------------------- 成员（阶段 4）
+@router.get("/{project_id}/members", summary="项目成员列表")
+async def list_project_members(
+    request: Request,
+    project_id: str,
+    user=Depends(require_permission("project.read")),
+    session=Depends(get_db_session),
+    ctx=Depends(get_audit_ctx),
+) -> dict:
+    service = _service(request, session, user, ctx)
+    members: list[ProjectMemberOut] = await service.list_members(project_id)
+    return success(request, {"items": [m.model_dump() for m in members], "total": len(members)})
+
+
+@router.post("/{project_id}/members", summary="添加项目成员（须为本组织用户）")
+async def add_project_member(
+    request: Request,
+    project_id: str,
+    payload: ProjectMemberAddIn,
+    user=Depends(require_permission("project.member.manage")),
+    session=Depends(get_db_session),
+    ctx=Depends(get_audit_ctx),
+) -> dict:
+    service = _service(request, session, user, ctx)
+    member = await service.add_member(project_id, payload)
+    return success(request, member.model_dump(), message="成员已添加")
+
+
+@router.delete("/{project_id}/members/{member_user_id}", summary="移除项目成员（二次确认）")
+async def remove_project_member(
+    request: Request,
+    project_id: str,
+    member_user_id: str,
+    confirm: bool = Query(False, description="高危操作需传 confirm=true"),
+    user=Depends(require_permission("project.member.manage")),
+    session=Depends(get_db_session),
+    ctx=Depends(get_audit_ctx),
+) -> dict:
+    if not confirm:
+        raise ConfirmationRequiredError("project.member.remove")
+    service = _service(request, session, user, ctx)
+    removed = await service.remove_member(project_id, member_user_id, confirm=confirm)
+    return success(request, OkOut(deleted=removed).model_dump(), message="成员已移除")
+
+
+# ----------------------------------------------------------------- 可见性（阶段 4）
+@router.post("/{project_id}/visibility", summary="切换项目可见性（二次确认）")
+async def change_project_visibility(
+    request: Request,
+    project_id: str,
+    payload: VisibilityChangeIn,
+    confirm: bool = Query(False, description="高危操作需传 confirm=true"),
+    user=Depends(require_permission("project.visibility")),
+    session=Depends(get_db_session),
+    ctx=Depends(get_audit_ctx),
+) -> dict:
+    if not confirm:
+        raise ConfirmationRequiredError("project.visibility.change")
+    service = _service(request, session, user, ctx)
+    project = await service.set_visibility(project_id, payload.visibility, confirm=confirm)
+    return success(request, project.model_dump(), message="可见性已更新")

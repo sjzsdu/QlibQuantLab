@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -165,13 +165,3 @@ class SystemInfoOut(BaseModel):
 class ReadyOut(BaseModel):
     status: str
     checks: dict[str, bool] = {}
-
-
-# ------------------------------------------------------------------ 数据集草稿（阶段 4 使用）
-class DatasetCreateIn(BaseModel):
-    project_id: str | None = None
-    data_source_id: str
-    license_id: str
-    name: str = Field(min_length=1, max_length=200)
-    start_date: date | None = None
-    end_date: date | None = None

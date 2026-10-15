@@ -50,9 +50,19 @@ USER_UUID = stable_uuid(USER)
 
 @pytest.fixture
 def settings(tmp_path: Path):
+    """独立 SQLite 文件：隔离于 API 测试的共享库（它们会给 dev-org 写台账行）。"""
+    from sqlalchemy import create_engine
+
+    from qqlab.models import Base
+
+    db_file = tmp_path / "handlers.db"
+    engine = create_engine(f"sqlite:///{db_file}")
+    Base.metadata.create_all(engine)
+    engine.dispose()
     return make_settings(
         COMPUTE_BACKEND="stub",
         QLIB_DATA_ROOT=str(tmp_path / "qlib_data"),
+        DATABASE_URL=f"sqlite+aiosqlite:///{db_file}",
     )
 
 
@@ -173,6 +183,86 @@ class TestDatasetImportHandler:
         assert await _count(container, DataSource) == 1
         assert await _count(container, DataLicense) == 1
         assert await _count(container, Dataset) == 1
+
+    async def test_update_mode_backfills_existing_dataset(self, settings, container) -> None:
+        """更新模式（payload 带 dataset_id，阶段 4 API 路径）：不 seed 台账，回填既有行。"""
+        _write_fake_dataset(settings)
+        handler = make_dataset_import_handler(settings, container)
+        await _seed_identity(container)
+
+        async with container.database.session() as session:
+            source = DataSource(
+                org_id=ORG_UUID, created_by=USER_UUID, name="UI 登记的数据源", kind="market"
+            )
+            session.add(source)
+            await session.flush()
+            license_row = DataLicense(
+                org_id=ORG_UUID,
+                created_by=USER_UUID,
+                data_source_id=source.id,
+                license_ref="UI-ToS",
+                allowed_use="internal research only",
+                granted_by="ui",
+            )
+            session.add(license_row)
+            await session.flush()
+            dataset = Dataset(
+                org_id=ORG_UUID,
+                created_by=USER_UUID,
+                data_source_id=source.id,
+                license_id=license_row.id,
+                name="UI 数据集",
+                qlib_region="cn",
+                freq="day",
+            )
+            session.add(dataset)
+            await session.flush()
+            dataset_id = dataset.id
+
+        sources_before = await _count(container, DataSource)
+        licenses_before = await _count(container, DataLicense)
+
+        job_id = await _add_job(container, JobKind.DATASET_IMPORT, {"dataset_id": str(dataset_id)})
+        result = await handler({"job_id": str(job_id)})
+
+        assert result["mode"] == "update"
+        assert result["dataset_id"] == str(dataset_id)
+        assert result["instrument_count"] == 2
+
+        job = await _get_job(container, job_id)
+        assert job is not None and job.status == JobStatus.SUCCEEDED
+
+        from sqlalchemy import select
+
+        async with container.database.session() as session:
+            row = (
+                (await session.execute(select(Dataset).where(Dataset.id == dataset_id))).scalars().first()
+            )
+            assert row is not None
+            assert row.status == "active"
+            assert row.instrument_count == 2
+            assert str(row.start_date) == "2024-01-02"
+            assert str(row.end_date) == "2024-01-04"
+            assert row.storage_uri.endswith(settings.QLIB_DATA_SUBDIR)
+
+        # 更新模式不再产生新的台账行
+        assert await _count(container, DataSource) == sources_before
+        assert await _count(container, DataLicense) == licenses_before
+
+        manifest = await container.storage.get(f"{ORG}/datasets/{dataset_id}/manifest.json")
+        assert json.loads(manifest)["dataset_id"] == str(dataset_id)
+
+    async def test_update_mode_unknown_dataset_fails_job(self, settings, container) -> None:
+        """更新模式下 dataset_id 不存在 → 任务 failed（fail-closed）。"""
+        _write_fake_dataset(settings)
+        handler = make_dataset_import_handler(settings, container)
+        job_id = await _add_job(container, JobKind.DATASET_IMPORT, {"dataset_id": str(uuid.uuid4())})
+
+        with pytest.raises(Exception, match="数据集不存在"):
+            await handler({"job_id": str(job_id)})
+
+        job = await _get_job(container, job_id)
+        assert job is not None and job.status == JobStatus.FAILED
 
     async def test_missing_data_dir_fails_job(self, settings, container) -> None:
         """数据未导入 → 任务 failed，错误信息可读（不被掩盖）。"""

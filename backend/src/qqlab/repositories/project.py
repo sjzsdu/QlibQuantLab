@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from sqlalchemy import func, or_, select
 
 from qqlab.core.ids import stable_uuid
-from qqlab.models import Project
+from qqlab.models import Project, ProjectMember
 from qqlab.repositories.base import BaseRepository
 
 
@@ -79,4 +79,43 @@ class ProjectRepository(BaseRepository):
         return await self.usernames([p.created_by for p in projects])
 
 
-__all__ = ["ProjectRepository"]
+class ProjectMemberRepository(BaseRepository):
+    """项目成员（project_members 表，无软删除字段 → 硬删除）。"""
+
+    def _base(self, project_id: uuid.UUID):  # noqa: ANN202
+        return select(ProjectMember).where(
+            ProjectMember.org_id == stable_uuid(self.scope.org_id),
+            ProjectMember.project_id == project_id,
+        )
+
+    async def list(self, project_id: uuid.UUID) -> list[ProjectMember]:
+        rows = (
+            await self.session.execute(self._base(project_id).order_by(ProjectMember.created_at.asc()))
+        ).scalars()
+        return list(rows.all())
+
+    async def get(self, project_id: uuid.UUID, user_id: str | uuid.UUID) -> ProjectMember | None:
+        try:
+            uid = uuid.UUID(str(user_id))
+        except ValueError:
+            return None
+        return (await self.session.execute(self._base(project_id).where(ProjectMember.user_id == uid))).scalars().first()
+
+    async def add(self, member: ProjectMember) -> ProjectMember:
+        self.session.add(member)
+        await self.session.flush()
+        return member
+
+    async def remove(self, project_id: uuid.UUID, user_id: uuid.UUID) -> bool:
+        member = await self.get(project_id, user_id)
+        if member is None:
+            return False
+        await self.session.delete(member)
+        await self.session.flush()
+        return True
+
+    async def user_names(self, members: list[ProjectMember]) -> dict[uuid.UUID, str]:
+        return await self.usernames([m.user_id for m in members])
+
+
+__all__ = ["ProjectMemberRepository", "ProjectRepository"]

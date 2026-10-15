@@ -24,8 +24,12 @@ class AuditAction:
     PROJECT_VISIBILITY_CHANGE = "project.visibility.change"
 
     DATA_SOURCE_CREATE = "data_source.create"
+    DATA_SOURCE_UPDATE = "data_source.update"
+    DATA_SOURCE_DELETE = "data_source.delete"
     DATA_LICENSE_CREATE = "data_license.create"
+    DATA_LICENSE_UPDATE = "data_license.update"
     DATA_LICENSE_REVOKE = "data_license.revoke"
+    DATASET_CREATE = "dataset.create"
     DATASET_IMPORT = "dataset.import"
 
     FACTOR_CREATE = "factor.create"

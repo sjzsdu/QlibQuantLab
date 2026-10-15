@@ -1,8 +1,13 @@
-"""数据导入 handler：校验 qlib 数据目录 + 登记数据源与**授权台账**。
+"""数据导入 handler：校验 qlib 数据目录 + 登记/回填数据集快照。
 
-台账 seed 的粒度（阶段 3 决策 D5）：1 条 data_sources（yahoo_official）+
-1 条 data_licenses（禁止再分发）+ 1 条 datasets（含区间/标的数快照）；
-阶段 4 在 UI 上接管台账管理。
+两种模式（阶段 4 决策）：
+
+- **更新模式**（payload 带 ``dataset_id``，阶段 4 API 路径）：数据源与授权台账
+  已由 UI 创建（服务层强制合规），handler 只做目录校验 + 回填
+  （instrument_count / start_date / end_date / storage_uri / status=active）；
+- **种子模式**（payload 不带 ``dataset_id``，阶段 3 smoke 与既有测试兼容）：
+  幂等 upsert 1 条 data_sources（yahoo_official）+ 1 条 data_licenses（禁止再分发）
+  + 1 条 datasets。
 
 校验优先走 qlib（与回测同一条取数路径）；worker 未装 qlib（stub 环境）时
 降级为**文件系统解析**（calendars/instruments 目录），两种路径结果同形。
@@ -17,7 +22,7 @@ from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import select
 
-from qqlab.core.errors import ValidationAppError
+from qqlab.core.errors import NotFoundError, ValidationAppError
 from qqlab.core.ids import stable_uuid
 from qqlab.core.logging import get_logger
 from qqlab.models import DataLicense, Dataset, DataSource
@@ -70,21 +75,99 @@ def _probe_filesystem(data_root: Path) -> dict[str, Any]:
     }
 
 
-async def _execute(
+async def _write_manifest(
+    container: Container, job: Job, dataset: Dataset, stats: dict[str, Any], org_key: str
+) -> None:
+    region = str((job.payload or {}).get("region") or dataset.qlib_region)
+    manifest = {
+        "org_id": org_key,
+        "dataset_id": str(dataset.id),
+        "region": region,
+        "freq": dataset.freq,
+        "instrument_count": int(stats["instrument_count"]),
+        "start": stats["start"],
+        "end": stats["end"],
+        "verified_via": stats["via"],
+        "license_ref": None,  # 更新模式：台账在 UI 登记，manifest 只记数据事实
+        "imported_at": datetime.now(tz=UTC).isoformat(),
+    }
+    manifest_key = f"{org_key}/datasets/{dataset.id}/manifest.json"
+    await container.storage.put(
+        manifest_key,
+        json.dumps(manifest, ensure_ascii=False, indent=2).encode(),
+        content_type="application/json",
+    )
+
+
+async def _apply_stats(dataset: Dataset, stats: dict[str, Any], storage_uri: str) -> None:
+    dataset.instrument_count = int(stats["instrument_count"])
+    dataset.start_date = datetime.fromisoformat(stats["start"]).date()
+    dataset.end_date = datetime.fromisoformat(stats["end"]).date()
+    if not dataset.storage_uri:
+        dataset.storage_uri = storage_uri
+    dataset.status = "active"
+
+
+async def _execute_update_mode(
     settings: Settings,
     container: Container,
     job: Job,
     repo: JobRepository,
     progress,  # noqa: ANN001 - ProgressCallback
+    stats: dict[str, Any],
 ) -> dict[str, Any]:
+    """阶段 4 路径：目录校验 + 回填既有数据集行（fail-closed org 边界）。"""
+    from qqlab.worker.qlib_env import data_dir_for  # noqa: PLC0415
+
+    session = repo.session
+    scope = repo.scope
+    dataset_id = str(job.payload.get("dataset_id") or "")
+    try:
+        did = stable_uuid(dataset_id)
+    except ValueError as exc:
+        raise NotFoundError(f"数据集不存在或不属于当前组织：{dataset_id}") from exc
+    dataset = (
+        (
+            await session.execute(
+                select(Dataset).where(Dataset.org_id == stable_uuid(scope.org_id), Dataset.id == did)
+            )
+        )
+        .scalars()
+        .first()
+    )
+    if dataset is None:
+        raise NotFoundError(f"数据集不存在或不属于当前组织：{dataset_id}")
+
+    await progress(60, "回填数据集快照")
+    await _apply_stats(dataset, stats, data_dir_for(settings, scope.org_id))
+    await session.flush()
+
+    await _write_manifest(container, job, dataset, stats, scope.org_id)
+    await repo.append_log(
+        job.id,
+        f"数据集就绪 via={stats['via']} instruments={stats['instrument_count']} "
+        f"range={stats['start']}~{stats['end']}",
+    )
+    logger.info("dataset_updated", extra={"dataset_id": str(dataset.id), **stats})
+    return {"dataset_id": str(dataset.id), "mode": "update", "instrument_count": stats["instrument_count"]}
+
+
+async def _execute_seed_mode(
+    settings: Settings,
+    container: Container,
+    job: Job,
+    repo: JobRepository,
+    progress,  # noqa: ANN001 - ProgressCallback
+    stats: dict[str, Any],
+) -> dict[str, Any]:
+    """阶段 3 路径（smoke 兼容）：幂等 upsert 数据源 + 台账 + 数据集。"""
+    from qqlab.worker.qlib_env import data_dir_for  # noqa: PLC0415
+
     payload = job.payload or {}
     scope = repo.scope
     session = repo.session
     region = str(payload.get("region") or settings.QLIB_REGION)
     dataset_name = str(payload.get("dataset_name") or f"{region} 日线（Yahoo 公开数据）")
-
-    await progress(10, "校验 qlib 数据目录")
-    stats = probe_dataset(settings, scope.org_id)
 
     await progress(40, "登记数据源（幂等 upsert）")
     org = stable_uuid(scope.org_id)
@@ -140,8 +223,6 @@ async def _execute(
         await session.flush()
 
     await progress(80, "写入数据集快照")
-    from qqlab.worker.qlib_env import data_dir_for  # noqa: PLC0415
-
     storage_uri = data_dir_for(settings, scope.org_id)
     dataset = (
         (
@@ -166,10 +247,7 @@ async def _execute(
         )
         session.add(dataset)
         await session.flush()
-    dataset.instrument_count = int(stats["instrument_count"])
-    dataset.start_date = datetime.fromisoformat(stats["start"]).date()
-    dataset.end_date = datetime.fromisoformat(stats["end"]).date()
-    dataset.status = "active"
+    await _apply_stats(dataset, stats, storage_uri)
     await session.flush()
 
     manifest = {
@@ -198,7 +276,22 @@ async def _execute(
         f"range={stats['start']}~{stats['end']}",
     )
     logger.info("dataset_registered", extra={"dataset_id": str(dataset.id), **stats})
-    return {"dataset_id": str(dataset.id), **manifest}
+    return {"dataset_id": str(dataset.id), "mode": "seed", **manifest}
+
+
+async def _execute(
+    settings: Settings,
+    container: Container,
+    job: Job,
+    repo: JobRepository,
+    progress,  # noqa: ANN001 - ProgressCallback
+) -> dict[str, Any]:
+    payload = job.payload or {}
+    await progress(10, "校验 qlib 数据目录")
+    stats = probe_dataset(settings, repo.scope.org_id)
+    if payload.get("dataset_id"):
+        return await _execute_update_mode(settings, container, job, repo, progress, stats)
+    return await _execute_seed_mode(settings, container, job, repo, progress, stats)
 
 
 def make_dataset_import_handler(settings: Settings, container: Container):  # noqa: ANN201

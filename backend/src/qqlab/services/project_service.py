@@ -13,8 +13,19 @@ from qqlab.core.tenant import OrgScope
 from qqlab.models import Project, ProjectMember
 from qqlab.ports.audit import AuditAction, AuditWriter
 from qqlab.ports.auth import CurrentUser
-from qqlab.repositories import ProjectRepository
-from qqlab.schemas import PageOut, ProjectCreateIn, ProjectOut, ProjectUpdateIn
+from qqlab.repositories import (
+    IdentityRepository,
+    ProjectMemberRepository,
+    ProjectRepository,
+)
+from qqlab.schemas import (
+    PageOut,
+    ProjectCreateIn,
+    ProjectMemberAddIn,
+    ProjectMemberOut,
+    ProjectOut,
+    ProjectUpdateIn,
+)
 from qqlab.services.base import AuditContext
 
 
@@ -139,6 +150,102 @@ class ProjectService:
             ip=self._ctx.ip,
         )
         return str(project.id)
+
+    # ---------------------------------------------------------------- 成员
+    async def list_members(self, project_id: str) -> list[ProjectMemberOut]:
+        project = await self._require(project_id)
+        repo = ProjectMemberRepository(self._session, self._scope)
+        rows = await repo.list(project.id)
+        names = await repo.user_names(rows)
+        return [
+            ProjectMemberOut(
+                user_id=str(m.user_id),
+                username=names.get(m.user_id, str(m.user_id)),
+                role=m.role,
+                added_at=m.created_at,
+            )
+            for m in rows
+        ]
+
+    async def add_member(self, project_id: str, data: ProjectMemberAddIn) -> ProjectMemberOut:
+        project = await self._require(project_id)
+        username = data.username.strip()
+        identity = IdentityRepository(self._session)
+        user = await identity.find_user_by_username(username)
+        if user is None:
+            raise NotFoundError(f"用户不存在或不属于当前组织：{username}")
+        membership = await identity.get_membership(self._scope.org_id, str(user.id))
+        if membership is None or membership.deleted_at is not None or membership.status != "active":
+            raise NotFoundError(f"用户不存在或不属于当前组织：{username}")
+        repo = ProjectMemberRepository(self._session, self._scope)
+        if await repo.get(project.id, str(user.id)) is not None:
+            raise ConflictError(f"用户 {username} 已是项目成员")
+        member = await repo.add(
+            ProjectMember(
+                org_id=stable_uuid(self._scope.org_id),
+                project_id=project.id,
+                user_id=user.id,
+                role=data.role,
+            )
+        )
+        await self._audit.record(
+            action=AuditAction.PROJECT_MEMBER_ADD,
+            resource_type="project",
+            resource_id=str(project.id),
+            detail={"username": username, "role": data.role},
+            user=self._user,
+            request_id=self._ctx.request_id,
+            ip=self._ctx.ip,
+        )
+        return ProjectMemberOut(
+            user_id=str(member.user_id),
+            username=username,
+            role=member.role,
+            added_at=member.created_at,
+        )
+
+    async def remove_member(self, project_id: str, user_id: str, *, confirm: bool) -> bool:
+        if not confirm:
+            raise ConfirmationRequiredError("project.member.remove")
+        project = await self._require(project_id)
+        repo = ProjectMemberRepository(self._session, self._scope)
+        existing = await repo.get(project.id, user_id)
+        if existing is None:
+            raise NotFoundError("成员不存在或不属于该项目")
+        if stable_uuid(user_id) == stable_uuid(self._scope.user_id):
+            raise ValidationAppError("不能移除自己")
+        await repo.remove(project.id, stable_uuid(user_id))
+        await self._audit.record(
+            action=AuditAction.PROJECT_MEMBER_REMOVE,
+            resource_type="project",
+            resource_id=str(project.id),
+            detail={"user_id": user_id},
+            user=self._user,
+            request_id=self._ctx.request_id,
+            ip=self._ctx.ip,
+        )
+        return True
+
+    # ---------------------------------------------------------------- 可见性
+    async def set_visibility(self, project_id: str, visibility: str, *, confirm: bool) -> ProjectOut:
+        """private ⇄ org ⇄ public；对外发布属高危操作，需二次确认。"""
+        if not confirm:
+            raise ConfirmationRequiredError("project.visibility.change")
+        project = await self._require(project_id)
+        before = project.visibility
+        project.visibility = visibility
+        await self._session.flush()
+        await self._audit.record(
+            action=AuditAction.PROJECT_VISIBILITY_CHANGE,
+            resource_type="project",
+            resource_id=str(project.id),
+            detail={"before": before, "after": visibility},
+            user=self._user,
+            request_id=self._ctx.request_id,
+            ip=self._ctx.ip,
+        )
+        names = await self._repo.created_by_names([project])
+        return _to_out(project, names)
 
     # ---------------------------------------------------------------- 内部
     async def _require(self, project_id: str) -> Project:

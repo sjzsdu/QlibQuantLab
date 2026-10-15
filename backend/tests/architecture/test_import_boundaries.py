@@ -179,6 +179,23 @@ def test_qlib_never_imported_at_module_level() -> None:
     assert not offenders, "qlib 必须是函数内延迟导入:\n" + "\n".join(offenders)
 
 
+#: 阶段 4：表达式校验器与数据集预览解析必须**纯标准库**（API 进程不引入任何第三方依赖）
+STDLIB_ONLY_CORE = ("core/qlib_expr.py", "core/qlib_data.py")
+
+
+def test_stage4_core_modules_are_stdlib_only() -> None:
+    """静态校验器 / bin 解析器只允许 import 标准库与 qqlab 自身。"""
+    stdlib = set(sys.stdlib_module_names)
+    offenders = []
+    for rel in STDLIB_ONLY_CORE:
+        for module in _imported_modules(SRC / rel):
+            root = module.split(".")[0]
+            if root in stdlib or root == "qqlab":
+                continue
+            offenders.append(f"{rel} -> {module}")
+    assert not offenders, f"{STDLIB_ONLY_CORE} 必须纯标准库:\n" + "\n".join(offenders)
+
+
 def test_api_process_never_loads_qlib_module() -> None:
     """子进程级验证：import qqlab.main（Web 进程）后 sys.modules 里没有 qlib。"""
     import subprocess  # noqa: PLC0415

@@ -49,6 +49,7 @@ services:
       - backend_venv:/app/.venv
       - objects_data:/data/objects # STORAGE_BACKEND=local 时的对象数据，重建容器不丢
       - ./scripts:/scripts:ro # 阶段 3：入队 smoke 脚本在容器内执行（走 compose 内网）
+      - qlib_data:/qlib_data:ro # 阶段 4：数据集预览（纯标准库 bin 解析，不 import qlib；只读）
     ports: ["${HOST_PORT_API:-8000}:8000"]
     environment:
       IS_WORKER: "false"
