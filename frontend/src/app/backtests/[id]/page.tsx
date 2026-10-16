@@ -223,12 +223,12 @@ function BacktestDetailContent({ id }: { id: string }) {
             </Col>
             <Col xs={12} sm={8} md={4}>
               <Card size="small">
-                <Statistic title="年化收益" value={pct(metrics.annual_return as number | undefined)} />
+                <Statistic title="年化收益" value={pct(metrics.annualized_return as number | undefined)} />
               </Card>
             </Col>
             <Col xs={12} sm={8} md={4}>
               <Card size="small">
-                <Statistic title="交易次数" value={metrics.n_trades ?? "—"} />
+                <Statistic title="交易次数" value={metrics.trade_count ?? "—"} />
               </Card>
             </Col>
             <Col xs={12} sm={8} md={4}>
