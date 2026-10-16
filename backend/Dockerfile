@@ -1,4 +1,6 @@
-# syntax=docker/dockerfile:1
+# 注：不写 `# syntax=` 指令 —— 该指令需联网拉取 docker/dockerfile:1 前端镜像，
+# 构建机访问 registry-1.docker.io 失败（EOF）时整个构建不可用；本文件只用基础语法，
+# 内置前端即可。若将来用到 heredoc/--mount 再恢复该指令。
 # 多阶段：
 #   base    —— 基础镜像与 uv（API 侧，Python 3.12）
 #   builder —— 依赖已安装（开发 compose 用 target: dev + bind mount + venv 卷）
@@ -55,6 +57,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     UV_COMPILE_BYTECODE=0
 # .python-version 钉的是 3.12（API 侧），worker 用 UV_PYTHON 覆盖为 3.11
 ENV UV_PYTHON=3.11
+# libgomp1：lightgbm 训练的 OpenMP 运行时（阶段 5 实机踩坑：缺库 → libgomp.so.1 not found）
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
 RUN pip install --no-cache-dir uv==0.12.5 \
     && useradd --create-home --uid 10001 qqlab
 WORKDIR /app
