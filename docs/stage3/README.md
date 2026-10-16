@@ -14,9 +14,9 @@
 | `backtest` handler | ✅ | 读快照 → ComputePort → 回写 `metrics`/`data_range`/`limitations` 三标注 + 曲线落对象存储 |
 | `JobRepository` org_key 注入 | ✅ | 入队时注入外部 org 串，worker fail-closed 校验（防串租户） |
 | 导入/连通/入队 smoke 脚本 | ✅ | `bootstrap_qlib_data.sh`（官方 zip 两段式）、`qlib_connectivity_smoke.py`（L1/L2/L3）、`enqueue_backtest_smoke.py` |
-| 测试 | ✅ | **176 passed, 1 skipped**（新增 38：simulator 12 / compute 15 / worker handlers 6 / 架构 3+2） |
+| 测试 | ✅ | **183 passed, 1 skipped**（阶段末态；含破产底线与终态自愈 2 条实测回归） |
 | `docker compose config -q` | ✅ | 默认与 `--profile qlib` 双双通过 |
-| **A3-1 / A3-3 / A3-4 实机 smoke** | ⏳ | Qlib-Server 启动、连通、端到端回测需实跑（脚本与命令已备好，见 [05-testing](./05-testing.md)） |
+| **A3-1 / A3-3 / A3-4 实机 smoke** | ✅ | 2026-10-15 实跑全过：Qlib-Server healthy、`make qlib-data` 3875 标的、L1/L2/L3 连通、stub+qlib 双后端端到端回测（结论见 [06-risks](./06-risks.md) 验收清单） |
 
 ## 文档导航
 

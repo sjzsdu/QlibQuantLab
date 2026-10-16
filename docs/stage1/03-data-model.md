@@ -159,7 +159,7 @@ erDiagram
         uuid org_id FK
         uuid project_id FK
         string name
-        uuid model_id FK nullable
+        uuid model_id FK "nullable"
         jsonb signal_config
         bool is_public
         int version

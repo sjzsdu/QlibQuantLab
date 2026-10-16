@@ -16,10 +16,10 @@
 | S3-9 | **`JobLog` 不含 `TenantMixin`** | 只按 `org_id` + `job_id` 过滤，无 `created_by` | 有意为之：日志是任务的附属，不需要操作人归属 | ✅ 设计如此 |
 | S3-10 | **worker 启动探测失败只告警不退出** | qlib-server 不可达时 worker 照常消费，任务快速失败 | 阶段 1 §7 的处置：job 标 `failed: qlib-server unreachable`，错误可见不掩盖 | ✅ 设计如此 |
 | S3-11 | **`qlib_data` 卷无备份策略** | 重建容器不丢，但宿主级灾难会丢 | 阶段 5+ 评估对象存储归档 | ⏳ 后续 |
-| S3-12 | **回测只经脚本入队（决策 #7）** | 无公共 API，UI 无法触发回测 | 阶段 4 补 API（经 service 层，不开直连 worker 的口子） | ⏳ 阶段 4 |
+| S3-12 | **回测只经脚本入队（决策 #7）** | 无公共 API，UI 无法触发回测 | 阶段 5 经 service 层补公共 API（阶段 4 计划评审时按路线图后移 —— 阶段 4 先补了导入所需的只读 `GET /jobs`，见 `docs/stage4/06-risks §3`；不开直连 worker 的口子） | ⏳ 阶段 5 |
 | S3-13 | **净值可能跌破 0**：`min_commission` 是绝对费用下限，净值衰减到极小时一笔迷你交易的佣金即击穿现金 → `_metrics` 对负底数取分数幂返回 **complex** → JSONB 落库 TypeError（实测：NAV = -5.28） | 回测结果无法落库 | 模拟器破产底线（净值 ≤ 0 清仓清零、亏损封顶 -100%）+ `_metrics` 年化收益兜底 + 回归测试 `test_bankruptcy_floor_caps_loss_at_100_percent` | ✅ 已修复 |
 | S3-14 | **flush 失败毒化 session**：execute 内 flush 异常（如 JSON 写入非法值）后 `mark_failed` 自抛 `PendingRollbackError` | 任务**永远卡 queued**、终态丢失（实测踩过：041410f8） | 失败路径：记日志失败 → 回滚 → 重新登记拾取（attempts 不丢）→ 重试落终态；重试仍败只记日志并原样上抛原始异常 + 回归测试 `test_flush_poison_still_marks_failed` | ✅ 已修复 |
-| S3-15 | **任务执行期间 DB 状态不可见**：整条任务链在单一事务里，终态才 commit | 运行中 `jobs` 行仍显示 queued/progress=0，进度只在 worker 日志 | 设计语义：崩溃时消息重投、任务仍 queued 可恢复（恰好依赖此不变量）；阶段 4 UI 若需实时进度再评估心跳提交 | ⚠️ 设计如此 |
+| S3-15 | **任务执行期间 DB 状态不可见**：整条任务链在单一事务里，终态才 commit | 运行中 `jobs` 行仍显示 queued/progress=0，进度只在 worker 日志 | 设计语义：崩溃时消息重投、任务仍 queued 可恢复（恰好依赖此不变量）；阶段 4 导入 UI 采用 2s 轮询 + 终态可见（运行中仍显示 queued/0%），实时进度再评估心跳提交 | ⚠️ 设计如此 |
 | S3-16 | **aio_pika 迭代器空闲 30s 重建**：每 30s 打一条 INFO `closing with timeout 30 seconds` + 换 ctag | 日志噪音（易误判为连接抖动） | `rabbitmq_mq.consume` 的设计内行为（注释明示）：空闲超时 ≠ 消费结束，重建迭代器继续 | ⚠️ 良性 |
 
 ## 2. 验收清单（阶段 3）

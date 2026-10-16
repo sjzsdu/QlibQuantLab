@@ -1,6 +1,6 @@
 # QlibQuantLab
 
-基于 [Qlib](https://github.com/china-ai-team/qlib) 的**开源多用户量化研究平台**：多组织数据与策略隔离、可插拔认证（Mock → Casdoor 只换环境变量）、训练与回测跑在独立 worker 容器里，Web 进程永不 `import qlib`。
+基于 [Qlib](https://github.com/microsoft/qlib) 的**开源多用户量化研究平台**：多组织数据与策略隔离、可插拔认证（Mock → Casdoor 只换环境变量）、训练与回测跑在独立 worker 容器里，Web 进程永不 `import qlib`。
 
 > ⚠️ **免责声明**：本平台仅供研究、教学与技术验证使用，**不构成任何投资建议**。所有回测结果、指标与曲线均为历史数据的统计呈现，不代表未来收益；使用者的投资决策与由此产生的任何后果由使用者自行承担。详见 `GET /api/v1/legal/disclaimer` 与页面底部法务入口。
 
@@ -10,8 +10,8 @@
 |------|------|------|
 | 1 | 架构设计（9 份文档） | ✅ 已确认 → `docs/stage1/` |
 | 2 | 后端骨架 + Mock 认证 + 用户上下文 + 前端骨架 + 双套 Compose | ✅ 已确认 → `docs/stage2/` |
-| 3 | 打通 Qlib-Server + 最小回测 | ⏳ 已交付，**176 个测试全绿**；实机 smoke（A3-1…A3-4）待验收 → `docs/stage3/` |
-| 4 | 项目 / 数据 / 因子 | — |
+| 3 | 打通 Qlib-Server + 最小回测 | ✅ 已交付并实机验收（2026-10-15，A3-1…A3-10 全过）→ `docs/stage3/` |
+| 4 | 项目 / 数据 / 因子 | ✅ 已交付，**247 个测试全绿** + live smoke 29/29 → `docs/stage4/` |
 | 5 | 训练 → 回测 → 可视化 → 任务中心 | — |
 | 6 | 审计 / 权限 / 合规 / e2e / README 定稿 | — |
 | 7 | 接入 Casdoor + 生产部署文档 | — |
