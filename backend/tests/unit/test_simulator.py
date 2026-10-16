@@ -254,3 +254,45 @@ class TestRunSimulation:
         assert sim.metrics["annualized_return"] == pytest.approx(-1.0)  # 而非 complex
         assert sim.metrics["max_drawdown"] == pytest.approx(-1.0)
         json.dumps(sim.metrics)  # 落库前必须能过 JSON 序列化（无 complex/NaN）
+
+    def test_missing_date_forward_fills_last_close_instead_of_zeroing_nav(self):
+        """数据缺口日按前值计价：持仓标的当日无行情 → 不清零、不触破产底线。
+
+        实机回归（阶段 5）：dev cn_data 在 2019-04-29 整个 A 股横截面为 NaN（指数有值），
+        旧口径「当日无行情即不计市值」把持仓市值瞬间清零 → 误触破产底线 → 净值永久
+        归零（total_return 恒 -100%，规则与模型信号源无一幸免）。缺口 ≠ 归零：
+        持仓应沿用最近有效收盘计价。
+        """
+        zero_cost = CostConfig(
+            commission_rate=0.0,
+            min_commission=0.0,
+            slippage_value=0.0,
+            impact_rate_per_million=0.0,
+            settlement_fee_rate=0.0,
+            stamp_duty_sell=0.0,
+        )
+        dates = [f"2024-06-{d:02d}" for d in range(1, 11)]  # 10 个交易日
+        gap = dates[5]
+        prices: PriceSeries = {}
+        for i in range(4):
+            instrument = f"GAP{i:03d}.XSHE"
+            # 前三个标的在缺口日整行缺失（模拟整横截面 NaN）；GAP003 代表"指数"全程在场，
+            # 提供缺口日 → 交易日历仍包含 gap。
+            prices[instrument] = [
+                Bar(date=d, open=10.0, close=10.0, volume=1e6)
+                for d in dates
+                if d != gap or i == 3
+            ]
+        # 手工信号：每天都选前三个（恰好是缺口日缺行情的三个）
+        signals = {
+            d: [(f"GAP{i:03d}.XSHE", 1.0 - i * 0.1) for i in range(4)] for d in dates
+        }
+        sim = run_simulation(
+            prices=prices, signals=signals, cost=zero_cost, topk=3, initial_cash=100_000
+        )
+        navs = dict(sim.nav_curve)
+
+        assert gap in navs  # 缺口日仍在交易日历中（由在场标的提供）
+        assert math.isclose(navs[gap], 100_000.0, rel_tol=1e-6)  # 前值计价，净值不塌方
+        assert all(nav > 90_000.0 for _, nav in sim.nav_curve)  # 全程无假破产
+        assert sim.metrics["total_return"] == pytest.approx(0.0, abs=1e-9)

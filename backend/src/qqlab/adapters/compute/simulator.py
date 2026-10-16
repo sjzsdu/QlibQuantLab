@@ -130,6 +130,11 @@ def run_simulation(
     cash = initial_cash
     holdings: dict[str, float] = {}  # instrument -> shares
     pending: dict[str, float] = {}  # instrument -> 目标市值（含被剔除持仓的 0 目标），次日开盘执行
+    # 标的最近有效收盘价：**缺口日前值计价**。实机踩坑（阶段 5）：dev cn_data 在
+    # 2019-04-29 整个 A 股横截面为 NaN（指数有值），按「当日无行情即不计市值」会把
+    # 持仓市值瞬间清零 → 误触破产底线 → 净值永久归零（total_return 恒 -100%）。
+    # 数据缺口 ≠ 资产归零：有前值按前值，仅有首次见到的标的才用 0 兜底。
+    last_close: dict[str, float] = {}
 
     nav_curve: list[tuple[str, float]] = []
     turnover_history: list[float] = []
@@ -141,6 +146,10 @@ def run_simulation(
 
     for date in calendar:
         today = by_date.get(date, {})
+        # 先滚动有效收盘前值（当日 close>0 即视为有效；NaN/非正收盘在取数侧已被过滤）
+        for inst, bar in today.items():
+            if bar.close > 0:
+                last_close[inst] = bar.close
 
         # ---- 1) 执行昨日收盘生成的目标市值 delta（今日开盘 ± 滑点，先卖后买） ----
         if pending:
@@ -150,9 +159,9 @@ def run_simulation(
             }
             if exec_prices:
                 nav_before = cash + sum(
-                    holdings.get(i, 0.0) * today[i].close
+                    holdings.get(i, 0.0)
+                    * (today[i].close if i in today and today[i].close > 0 else last_close.get(i, 0.0))
                     for i in holdings
-                    if i in today and today[i].close > 0
                 )
                 # delta = 目标市值 - 当前持仓市值（开盘计价）；负 = 卖出，正 = 买入
                 deltas = [
@@ -208,8 +217,12 @@ def run_simulation(
             pending = {}
 
         # ---- 2) 收盘盯市 ----
+        # 缺口日按前值计价（见 last_close 注释）：当日无有效收盘的持仓沿用最近有效收盘，
+        # 只有从未见过有效行情的持仓才计 0 —— 数据缺口不再误触破产底线。
         nav = cash + sum(
-            holdings.get(i, 0.0) * today[i].close for i in holdings if i in today and today[i].close > 0
+            holdings.get(i, 0.0)
+            * (today[i].close if i in today and today[i].close > 0 else last_close.get(i, 0.0))
+            for i in holdings
         )
         if nav <= 0:
             # 破产底线（有限债务约定）：净值不可能为负。min_commission 是**绝对**费用下限，

@@ -35,6 +35,12 @@ dev = [
     "pytest>=8.3,<10",
     "pytest-asyncio>=0.24,<2",
     "ruff>=0.8,<1",
+    # 单测直接覆盖 worker 侧 pandas 计算口径（如 _daily_ic 的日期分组，见
+    # docs/stage5/05-testing.md §4 实机回归）。只进开发 venv：容器 `--no-dev`
+    # 且不带 `--extra dev`，API/worker 运行时不受影响（worker 走 `--extra qlib`）。
+    # 上界对齐 uv.lock 中 qlib extra 的解析（pyqlib 对 pandas 无约束 → 锁定 worker
+    # 实机在跑的同一版本，避免 dev 与 worker 两套 pandas 语义）。
+    "pandas>=2.2",
 ]
 
 [project.scripts]

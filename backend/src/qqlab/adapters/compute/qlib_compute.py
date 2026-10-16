@@ -230,7 +230,12 @@ class QlibComputeProvider:
 
     @staticmethod
     def _daily_ic(pred, actual) -> list[float]:  # noqa: ANN001
-        """按日横截面 rank-IC 序列（MultiIndex 末位为日期；每日样本 < 5 跳过）。"""
+        """按日横截面 rank-IC 序列（输入须为**带 MultiIndex 的 Series**：末位为日期；每日样本 < 5 跳过）。
+
+        实机回归（阶段 5）：调用点若传 ``.to_numpy()`` 会退化成 RangeIndex，
+        ``groupby(level=-1)`` 变成按行分组（每组 1 行 < 5）→ daily 恒为空 →
+        valid_ic 静默回退 pooled、valid_ir 恒 0（见 05-testing §4）。
+        """
         import pandas as pd  # noqa: PLC0415
 
         frame = pd.DataFrame({"p": pred, "a": actual}).dropna()
@@ -285,7 +290,8 @@ class QlibComputeProvider:
         n_valid_days = 0
         if va is not None and not va.empty:
             valid_pred = pd.Series(model.predict(va[feats].to_numpy()), index=va.index)
-            daily = self._daily_ic(valid_pred.to_numpy(), va["__target__"].to_numpy())
+            # 传 Series（保留 MultiIndex）而非 to_numpy()：_daily_ic 依赖日期分组，见其 docstring
+            daily = self._daily_ic(valid_pred, va["__target__"])
             if daily:
                 valid_ic = sum(daily) / len(daily)
                 n_valid_days = len(daily)

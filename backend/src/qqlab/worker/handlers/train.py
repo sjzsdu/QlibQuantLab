@@ -57,7 +57,10 @@ async def _execute(
     run = await run_repo.get(run_id)
     if run is None:
         raise ValidationAppError(f"training_run {run_id} 不存在或不属于租户 {scope.org_id}")
-    run.job_id = run.job_id or job.id  # 入队竞态兜底（API 侧 job_id 回填还没提交）
+    # 永远关联**当前执行任务**：既是入队竞态兜底（API 侧 job_id 回填还没提交），
+    # 也是重试（D5-12 复制 payload 换新 job_id）的正确口径 —— 旧的 `or` 语义让 run
+    # 永久指向最初的（已取消）任务，UI join 出错误终态（实机回归见 05-testing §4）。
+    run.job_id = job.id
     dataset = (
         (
             await session.execute(
@@ -111,7 +114,7 @@ async def _execute(
     data_range["artifact_key"] = result.artifact_key
 
     await session.refresh(run)  # 训练期间 worker 自己也写过（无）；防 API 侧回填 job_id 竞态
-    run.job_id = run.job_id or job.id
+    run.job_id = job.id  # 同上：关联当前执行任务（重试后即新 job）
     run.metrics = dict(result.metrics)
     run.data_range = data_range
     run.artifact_uri = result.artifact_key

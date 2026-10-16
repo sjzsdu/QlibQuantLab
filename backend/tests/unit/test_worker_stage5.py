@@ -278,6 +278,39 @@ class TestTrainHandler:
         job = await _get_job(container, job_id)
         assert job is not None and job.status == JobStatus.FAILED
 
+    async def test_retry_relinks_run_to_current_job(self, settings, container) -> None:
+        """重试任务（D5-12 复制 payload 换新 job_id）执行后，run 必须改链到当前任务。
+
+        实机回归（阶段 5）：旧口径 ``run.job_id = run.job_id or job.id`` 让 run 永久
+        关联最初的（已取消）任务 → 列表/详情 join 出 `job_status=canceled`，尽管重试
+        已成功、metrics/artifact 都已回写（见 05-testing §4）。
+        """
+        refs = await _seed_study(container)
+        handler = make_train_handler(settings, container, StubComputeProvider(container.storage))
+        first = await _add_job(container, JobKind.TRAIN, _train_payload(refs))
+        await handler({"job_id": str(first)})
+
+        # 重试 = 复制 payload + retry_of（新 job_id、同 training_run_id）
+        retry = await _add_job(
+            container, JobKind.TRAIN, {**_train_payload(refs), "retry_of": str(first)}
+        )
+        result = await handler({"job_id": str(retry)})
+        assert result["engine"] == "stub"
+
+        from sqlalchemy import select
+
+        async with container.database.session() as session:
+            run = (
+                (await session.execute(select(TrainingRun).where(TrainingRun.id == refs["run_id"])))
+                .scalars()
+                .first()
+            )
+            assert run is not None
+            assert run.job_id == retry  # 关联当前执行任务，而非最初的 first
+
+        job = await _get_job(container, retry)
+        assert job is not None and job.status == JobStatus.SUCCEEDED
+
 
 class TestBacktestModelSignal:
     async def _seed_model_backtest(self, container, *, with_run: bool) -> uuid.UUID:
@@ -470,3 +503,31 @@ def test_default_split_rejects_short_span() -> None:
 
     with pytest.raises(ValidationAppError, match="无法默认切分"):
         default_split(date(2023, 1, 3), date(2023, 2, 1))
+
+
+def test_daily_ic_groups_by_date_on_multiindex_inputs() -> None:
+    """``_daily_ic`` 须按**日期**（MultiIndex 末位）分组；输入退化成 RangeIndex 即全空。
+
+    实机回归（阶段 5）：调用点曾传 ``.to_numpy()`` → RangeIndex → ``groupby(level=-1)``
+    按行分组（每组 1 行 < 5）→ daily 恒为空 → valid_ic 静默回退 pooled、valid_ir 恒 0
+    （见 docs/stage5/05-testing.md §4）。
+    """
+    import numpy as np
+    import pandas as pd
+
+    from qqlab.adapters.compute.qlib_compute import QlibComputeProvider
+
+    idx = pd.MultiIndex.from_product(
+        [[f"SH60000{i}" for i in range(6)], pd.date_range("2024-01-02", periods=6)],
+        names=["instrument", "date"],
+    )
+    values = np.linspace(0.01, 0.36, len(idx))
+    actual = pd.Series(values, index=idx)
+    pred = pd.Series(values[::-1], index=idx)  # 每日横截面内反序 → 稳定负相关
+
+    daily = QlibComputeProvider._daily_ic(pred, actual)
+    assert len(daily) == 6  # 6 个交易日，各 6 个标的 → 每日一个 rank-IC
+    assert all(-1.0 <= v <= 1.0 for v in daily)
+
+    # 反例：同样数据剥离索引（RangeIndex）→ 按行分组、每组 < 5 → 全部跳过
+    assert QlibComputeProvider._daily_ic(pred.to_numpy(), actual.to_numpy()) == []
