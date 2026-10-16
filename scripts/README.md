@@ -8,6 +8,7 @@
 | `qlib_connectivity_smoke.py` | 3 | Qlib-Server 三级连通性（L1 WS 握手 / L2 instruments / L3 features）；`make qlib-smoke`（在 worker 容器内跑） |
 | `enqueue_backtest_smoke.py` | 3 | 入队 `dataset_import` / `backtest` 任务（决策 #7：脚本入队，不开公共 API）；`make dataset-import-smoke` / `make backtest-smoke`（在 backend 容器内跑） |
 | `dev_up.sh` | 3 | 一键：生成 `.env` → `docker compose up -d --build` → 等就绪；`--qlib` 叠加 qlib profile |
+| `stage5_smoke.py` | 5 | 阶段 5 全链路实机验收（43 项：模型快照/训练/双信号回测/四标注/增量日志/取消双通道/重试/负例）；栈就绪后 `python3 scripts/stage5_smoke.py`（对 `localhost:8000`），记录见 `docs/stage5/05-testing.md` §3 |
 | `pin_versions.sh` | 7 | 导出依赖快照到锁文件 |
 
 > `docker-compose.yml` 里 `qlib-bootstrap`（qlib profile）与 `backend` / `worker` 都按

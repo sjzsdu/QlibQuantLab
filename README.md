@@ -12,7 +12,7 @@
 | 2 | 后端骨架 + Mock 认证 + 用户上下文 + 前端骨架 + 双套 Compose | ✅ 已确认 → `docs/stage2/` |
 | 3 | 打通 Qlib-Server + 最小回测 | ✅ 已交付并实机验收（2026-10-15，A3-1…A3-10 全过）→ `docs/stage3/` |
 | 4 | 项目 / 数据 / 因子 | ✅ 已交付，**247 个测试全绿** + live smoke 29/29 → `docs/stage4/` |
-| 5 | 训练 → 回测 → 可视化 → 任务中心 | — |
+| 5 | 训练 → 回测 → 可视化 → 任务中心 | ✅ 已交付，**304 个测试全绿** + live smoke 43/43 + 浏览器冒烟 7 页 → `docs/stage5/` |
 | 6 | 审计 / 权限 / 合规 / e2e / README 定稿 | — |
 | 7 | 接入 Casdoor + 生产部署文档 | — |
 
@@ -94,7 +94,7 @@ QlibQuantLab/
 │   │   ├── api/ services/ repositories/ models/ core/ schemas/
 │   │   └── worker/       独立任务进程（qlib 只允许在 worker/qlib_env.py + adapters/compute/qlib_compute.py）
 │   ├── alembic/          0001：一次建全 17 张表 + 种子
-│   └── tests/            architecture · unit · contract · api · integration（176 用例）
+│   └── tests/            architecture · unit · contract · api · integration（304 用例 + 1 skip）
 ├── frontend/         Next.js 15 + TS + AntD 5 + TanStack Query（pnpm）
 ├── docs/stage1/      架构设计（9 份，阶段基准）
 ├── docs/stage2/      阶段 2 交付文档
@@ -124,7 +124,7 @@ QlibQuantLab/
 ## 测试
 
 ```bash
-cd backend && uv run pytest -q        # 176 passed，<5s，零外部依赖
+cd backend && uv run pytest -q        # 304 passed + 1 skipped，<10s，零外部依赖
 uv run ruff check .                   # All checks passed
 # 真实后端契约（可选，需本地服务；redis 端口按默认 HOST_PORT_REDIS=16379，用外部实例就改成实际值）
 TEST_REDIS_URL=redis://localhost:16379/9 uv run pytest tests/contract -q
