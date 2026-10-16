@@ -99,7 +99,11 @@ class ProjectMemberRepository(BaseRepository):
             uid = uuid.UUID(str(user_id))
         except ValueError:
             return None
-        return (await self.session.execute(self._base(project_id).where(ProjectMember.user_id == uid))).scalars().first()
+        return (
+            (await self.session.execute(self._base(project_id).where(ProjectMember.user_id == uid)))
+            .scalars()
+            .first()
+        )
 
     async def add(self, member: ProjectMember) -> ProjectMember:
         self.session.add(member)

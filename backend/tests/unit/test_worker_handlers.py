@@ -191,9 +191,7 @@ class TestDatasetImportHandler:
         await _seed_identity(container)
 
         async with container.database.session() as session:
-            source = DataSource(
-                org_id=ORG_UUID, created_by=USER_UUID, name="UI 登记的数据源", kind="market"
-            )
+            source = DataSource(org_id=ORG_UUID, created_by=USER_UUID, name="UI 登记的数据源", kind="market")
             session.add(source)
             await session.flush()
             license_row = DataLicense(
@@ -235,9 +233,7 @@ class TestDatasetImportHandler:
         from sqlalchemy import select
 
         async with container.database.session() as session:
-            row = (
-                (await session.execute(select(Dataset).where(Dataset.id == dataset_id))).scalars().first()
-            )
+            row = (await session.execute(select(Dataset).where(Dataset.id == dataset_id))).scalars().first()
             assert row is not None
             assert row.status == "active"
             assert row.instrument_count == 2

@@ -90,7 +90,10 @@ class TestDataChain:
         license_row = _create_license(client, source["id"])
         _create_dataset(client, source["id"], license_row["id"])
 
-        actions = {row["action"] for row in client.get("/api/v1/audit-logs", params={"page_size": 100}).json()["data"]["items"]}
+        actions = {
+            row["action"]
+            for row in client.get("/api/v1/audit-logs", params={"page_size": 100}).json()["data"]["items"]
+        }
         assert {"data_source.create", "data_license.create", "dataset.create"} <= actions
 
     def test_revoke_writes_revoke_audit(self, client: TestClient) -> None:
@@ -102,7 +105,10 @@ class TestDataChain:
             json={"status": "revoked"},
             headers=csrf_headers(client),
         )
-        actions = {row["action"] for row in client.get("/api/v1/audit-logs", params={"page_size": 100}).json()["data"]["items"]}
+        actions = {
+            row["action"]
+            for row in client.get("/api/v1/audit-logs", params={"page_size": 100}).json()["data"]["items"]
+        }
         assert "data_license.revoke" in actions
 
 
@@ -236,9 +242,7 @@ class TestImportFlow:
         license_row = _create_license(client, source["id"])
         dataset = _create_dataset(client, source["id"], license_row["id"])
 
-        response = client.post(
-            f"/api/v1/datasets/{dataset['id']}/import", headers=csrf_headers(client)
-        )
+        response = client.post(f"/api/v1/datasets/{dataset['id']}/import", headers=csrf_headers(client))
         assert response.status_code == 200, response.text
         receipt = response.json()["data"]
         assert receipt["dataset_id"] == dataset["id"]
@@ -251,9 +255,7 @@ class TestImportFlow:
         assert job["payload"]["dataset_id"] == dataset["id"]
 
         # 活跃任务未结束时重复导入 → 活跃态 payload_hash 唯一索引拦截
-        duplicate = client.post(
-            f"/api/v1/datasets/{dataset['id']}/import", headers=csrf_headers(client)
-        )
+        duplicate = client.post(f"/api/v1/datasets/{dataset['id']}/import", headers=csrf_headers(client))
         assert duplicate.status_code == 409
 
 
@@ -315,14 +317,16 @@ class TestPreview:
         assert instruments["total"] == 1
         assert instruments["items"][0]["instrument"] == "AAA.XSHE"
 
-        calendar = client.get(f"{base}/calendar", params={"start": "2024-01-02", "end": "2024-01-03"}).json()["data"]
+        calendar = client.get(f"{base}/calendar", params={"start": "2024-01-02", "end": "2024-01-03"}).json()[
+            "data"
+        ]
         assert calendar["total"] == 2
         assert calendar["start"] == "2024-01-02"
         assert calendar["end"] == "2024-01-03"
 
-        preview = client.get(
-            f"{base}/preview", params={"instrument": "AAA.XSHE", "page_size": 2}
-        ).json()["data"]
+        preview = client.get(f"{base}/preview", params={"instrument": "AAA.XSHE", "page_size": 2}).json()[
+            "data"
+        ]
         assert preview["fields"] == list(FIELDS)
         assert preview["total"] == 3
         assert len(preview["items"]) == 2
@@ -340,9 +344,7 @@ class TestPreview:
         source = _create_source(client)
         license_row = _create_license(client, source["id"])
         dataset = _create_dataset(client, source["id"], license_row["id"])
-        response = client.get(
-            f"/api/v1/datasets/{dataset['id']}/preview", params={"instrument": "AAA.XSHE"}
-        )
+        response = client.get(f"/api/v1/datasets/{dataset['id']}/preview", params={"instrument": "AAA.XSHE"})
         assert response.status_code == 400
         assert "尚未导入" in response.json()["message"]
 
@@ -357,11 +359,7 @@ class TestPreview:
         client, dataset = self._ready_dataset(tmp_path)
         assert dataset["id"]
         # 切换到另一组织的 app，读不到本组织数据集（含其 storage_uri 路径）
-        other = TestClient(
-            create_app(
-                _other_org_settings(QLIB_DATA_ROOT=str(tmp_path / "qlib_data"))
-            )
-        )
+        other = TestClient(create_app(_other_org_settings(QLIB_DATA_ROOT=str(tmp_path / "qlib_data"))))
         login(other, "admin")
         assert other.get(f"/api/v1/datasets/{dataset['id']}/instruments").status_code == 404
         assert other.get(f"/api/v1/datasets/{dataset['id']}/calendar").status_code == 404
@@ -387,8 +385,6 @@ def test_org_scoped_storage_path_is_enforced(tmp_path: Path) -> None:
     finally:
         conn.close()
 
-    response = client.get(
-        f"/api/v1/datasets/{dataset['id']}/preview", params={"instrument": "AAA.XSHE"}
-    )
+    response = client.get(f"/api/v1/datasets/{dataset['id']}/preview", params={"instrument": "AAA.XSHE"})
     assert response.status_code == 404
     assert "不属于当前组织" in response.json()["message"]

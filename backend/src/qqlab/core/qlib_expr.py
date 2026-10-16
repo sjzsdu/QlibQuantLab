@@ -271,7 +271,9 @@ class _Parser:
                     raise ValueError(f"函数 `{name}()` 括号不配对：缺少 `)`")
                 break
         if argc < lo or (hi is not None and argc > hi):
-            raise ValueError(f"函数 `{name}()` 需要 {lo}~{hi if hi is not None else '∞'} 个参数，实际 {argc} 个")
+            raise ValueError(
+                f"函数 `{name}()` 需要 {lo}~{hi if hi is not None else '∞'} 个参数，实际 {argc} 个"
+            )
 
     @staticmethod
     def _check_depth(depth: int) -> None:

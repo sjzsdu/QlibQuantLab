@@ -23,7 +23,9 @@ def _create_project(client: TestClient, name: str | None = None) -> dict:
     return response.json()["data"]
 
 
-def _create_factor(client: TestClient, project_id: str, *, name: str | None = None, expression: str = "$close / $open - 1") -> dict:
+def _create_factor(
+    client: TestClient, project_id: str, *, name: str | None = None, expression: str = "$close / $open - 1"
+) -> dict:
     response = client.post(
         "/api/v1/factors",
         json={"project_id": project_id, "name": name or _unique("factor"), "expression": expression},
@@ -149,13 +151,14 @@ class TestPublish:
         assert denied.status_code == 400
         assert denied.json()["code"] == 1007
 
-        ok = client.post(
-            f"/api/v1/factors/{factor['id']}/publish?confirm=true", headers=csrf_headers(client)
-        )
+        ok = client.post(f"/api/v1/factors/{factor['id']}/publish?confirm=true", headers=csrf_headers(client))
         assert ok.status_code == 200
         assert ok.json()["data"]["visibility"] == "public"
 
-        actions = {row["action"] for row in client.get("/api/v1/audit-logs", params={"page_size": 100}).json()["data"]["items"]}
+        actions = {
+            row["action"]
+            for row in client.get("/api/v1/audit-logs", params={"page_size": 100}).json()["data"]["items"]
+        }
         assert "factor.publish" in actions
 
     def test_publish_requires_admin(self, client: TestClient) -> None:

@@ -92,7 +92,9 @@ async def list_data_sources(
     ctx=Depends(get_audit_ctx),
 ) -> dict:
     service = _source_service(request, session, user, ctx)
-    return success(request, (await service.list(page=page, page_size=page_size, keyword=keyword)).model_dump())
+    return success(
+        request, (await service.list(page=page, page_size=page_size, keyword=keyword)).model_dump()
+    )
 
 
 @router.post("/data-sources", summary="登记数据源")
@@ -201,7 +203,9 @@ async def update_data_license(
     ctx=Depends(get_audit_ctx),
 ) -> dict:
     service = _license_service(request, session, user, ctx)
-    return success(request, (await service.update(license_id, payload)).model_dump(), message="授权台账已更新")
+    return success(
+        request, (await service.update(license_id, payload)).model_dump(), message="授权台账已更新"
+    )
 
 
 # ------------------------------------------------------------------ 数据集
@@ -273,9 +277,7 @@ async def dataset_instruments(
 ) -> dict:
     service = _dataset_service(request, session, user, ctx)
     items, total, page, page_size = await service.instruments(dataset_id, page=page, page_size=page_size)
-    out = InstrumentsOut(
-        dataset_id=dataset_id, items=items, total=total, page=page, page_size=page_size
-    )
+    out = InstrumentsOut(dataset_id=dataset_id, items=items, total=total, page=page, page_size=page_size)
     return success(request, out.model_dump())
 
 

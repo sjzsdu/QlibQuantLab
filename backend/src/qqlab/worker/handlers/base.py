@@ -1,8 +1,16 @@
-"""worker handler 公共骨架：任务生命周期（queued → running → succeeded | failed）。
+"""worker handler 公共骨架：任务生命周期（queued → running → succeeded | failed | canceled）。
 
 统一处理：加载 job（MQ payload 只带 id，**job 行才是权威**，org_id 从中取）→
 校验 payload ``org_key``（外部 org 串）与 ``job.org_id`` 一致 →
-mark_running（比较并交换）→ 执行 → mark_succeeded / mark_failed + 日志。
+mark_running（比较并交换）→ 执行 → mark_succeeded / mark_failed / mark_canceled + 日志。
+
+阶段 5 增量（docs/stage5）：
+- **独立会话日志**（D5-e）：progress 日志经 ``JobLogSink`` 每行立即提交，
+  任务执行中前端轮询 ``GET /jobs/{id}/logs`` 即可见（任务表终态仍走本会话提交）；
+- **progress 显式提交**：heartbeat 与 running 状态在 progress 检查点落库，
+  轮询端看到真实进度（阶段 3 是 session 退出统一提交，PG 上执行中不可见）；
+- **协作式取消**（D5-f）：progress 先查缓存标记 ``job:{id}:cancel``，命中抛
+  ``JobCanceled`` → 落 canceled 终态并正常 ack（取消不是失败）。
 
 org_key 由 ``JobRepository.create`` 在入队时从 API 层 scope 注入：数据目录
 （``/qlib_data/{org_key}/cn_data``）与对象存储键都以它为租户前缀，必须与
@@ -16,13 +24,16 @@ import uuid
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
+from sqlalchemy import func, select
+
 from qqlab.core.errors import ValidationAppError
 from qqlab.core.ids import stable_uuid
 from qqlab.core.logging import get_logger
 from qqlab.core.tenant import OrgScope
-from qqlab.models import Job
+from qqlab.models import Job, JobLog
 from qqlab.ports.compute import ProgressCallback
 from qqlab.repositories.job import JobRepository
+from qqlab.services.job_query_service import cancel_flag_key
 
 if TYPE_CHECKING:  # pragma: no cover - 仅类型
     from qqlab.config import Settings
@@ -35,6 +46,56 @@ ExecuteFn = Callable[
     [Job, JobRepository, ProgressCallback],
     Awaitable[dict[str, Any]],
 ]
+
+
+class JobCanceled(Exception):
+    """协作式取消信号：progress 检查点发现取消标记时抛出，run_job 捕获落终态。"""
+
+
+class JobLogSink:
+    """job_logs 独立会话写入器（D5-e）：每行立即提交，执行中即可见。
+
+    - ``seq = max+1``：worker 单并发（``QLIB_WORKER_CONCURRENCY=1``）串行写入，
+      与任务会话的终态日志也是先后顺序，不会撞 ``uq_job_logs_job_seq``；
+    - 写失败只告警不打断任务（日志可丢，任务不能因日志而失败）；
+    - SQLite(StaticPool) 下与任务会话共用单连接——调用全程串行、每步自带提交，
+      不存在交叠事务。
+    """
+
+    def __init__(self, database, *, org_id: uuid.UUID, job_id: uuid.UUID) -> None:  # noqa: ANN001
+        self._database = database
+        self._org_id = org_id
+        self._job_id = job_id
+
+    async def write(self, message: str, *, level: str = "info") -> None:
+        try:
+            async with self._database.session() as session:  # 退出即 commit
+                seq = (
+                    int(
+                        (
+                            await session.execute(
+                                select(func.coalesce(func.max(JobLog.seq), -1)).where(
+                                    JobLog.job_id == self._job_id
+                                )
+                            )
+                        ).scalar_one()
+                    )
+                    + 1
+                )
+                session.add(
+                    JobLog(
+                        org_id=self._org_id,
+                        job_id=self._job_id,
+                        seq=seq,
+                        level=level,
+                        message=message[:4000],
+                    )
+                )
+        except Exception:  # noqa: BLE001 - 日志失败绝不打断任务
+            logger.warning(
+                "job_log_sink_failed",
+                extra={"job_id": str(self._job_id), "detail": message[:120]},
+            )
 
 
 async def run_job(
@@ -76,20 +137,54 @@ async def run_job(
         # 外部 org 串做租户前缀（数据目录 / 对象存储键 / spec.org_id 与 API 层同源）
         scope = OrgScope(org_id=str(org_key), user_id=str(job.created_by))
         repo = JobRepository(session, scope)
+        sink = JobLogSink(container.database, org_id=job.org_id, job_id=job.id)
 
         if not await repo.mark_running(job_id):
             logger.warning("job_not_queued", extra={"job_id": str(job_id), "status": job.status})
             return {"skipped": True, "reason": f"job 状态不是 queued（当前 {job.status}）"}
 
+        # 立即提交：running 状态先行可见（轮询端不再看到假 queued；也让后续
+        # 协作式取消的 CAS 判断建立在真实状态上）
+        await session.commit()
+        flag_key = cancel_flag_key(str(job_id))
+
+        async def _honor_cancel(detail: str) -> dict[str, Any] | None:
+            """取消标记命中 → 落 canceled 终态 + 清标记，返回终止结果。"""
+            with contextlib.suppress(Exception):
+                await container.cache.delete(flag_key)
+            try:
+                await repo.mark_canceled(job_id, reason=detail)
+                await repo.append_log(job_id, f"canceled: {detail}", level="warn")
+                await session.commit()
+            except Exception:  # noqa: BLE001 - 终态写入失败只记录，交上层处理
+                logger.exception("job_cancel_persist_failed", extra={"job_id": str(job_id)})
+            logger.info("job_canceled", extra={"job_id": str(job_id), "detail": detail})
+            return {"canceled": True, "job_id": str(job_id), "reason": detail}
+
+        # 开跑前再查一次（覆盖 mark_running 之后、首个 progress 之前的取消）
+        if await container.cache.get(flag_key) is not None:
+            result = await _honor_cancel("用户取消（执行开始前收到标记）")
+            if result is not None:  # pragma: no cover - 恒非 None
+                return result
+
         async def progress(pct: int, message: str) -> None:
+            # 1) 协作式取消检查（D5-f）：API 对 running 任务只置缓存标记
+            if await container.cache.get(flag_key) is not None:
+                raise JobCanceled(f"用户取消（progress={pct}% 检查点）")
+            # 2) 心跳 + 显式提交：running/progress 对轮询端可见（阶段 5）
             await repo.heartbeat(job_id, progress=pct)
-            await repo.append_log(job_id, f"[{pct}%] {message}")
+            await session.commit()
+            # 3) 独立会话落日志（立即可见，D5-e）
+            await sink.write(f"[{pct}%] {message}")
             # 注意：extra 键不能用 "message"（LogRecord 保留字段，logging 会抛
             # KeyError: Attempt to overwrite 'message' in LogRecord —— 阶段 3 实测踩过）
             logger.info("job_progress", extra={"job_id": str(job_id), "progress": pct, "detail": message})
 
         try:
             result = await execute(job, repo, progress)
+        except JobCanceled as exc:
+            canceled = await _honor_cancel(str(exc))
+            return canceled if canceled is not None else {"canceled": True, "job_id": str(job_id)}
         except Exception as exc:  # noqa: BLE001 - 单任务失败不应终止消费者
             try:
                 await repo.mark_failed(job_id, str(exc))

@@ -19,7 +19,11 @@ from qqlab.core.errors import ValidationAppError
 from qqlab.core.logging import get_logger, setup_logging
 from qqlab.models import JobKind
 from qqlab.ports.message_queue import JOB_QUEUE, Message
-from qqlab.worker.handlers import make_backtest_handler, make_dataset_import_handler
+from qqlab.worker.handlers import (
+    make_backtest_handler,
+    make_dataset_import_handler,
+    make_train_handler,
+)
 
 logger = get_logger("qqlab.worker")
 
@@ -106,6 +110,7 @@ def build_worker(settings: Settings | None = None) -> Worker:
     compute = build_compute(settings, container.storage)
     worker.register(JobKind.DATASET_IMPORT, make_dataset_import_handler(settings, container))
     worker.register(JobKind.BACKTEST, make_backtest_handler(settings, container, compute))
+    worker.register(JobKind.TRAIN, make_train_handler(settings, container, compute))
     return worker
 
 

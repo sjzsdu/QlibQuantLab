@@ -109,11 +109,7 @@ class TestProjectMembers:
         assert all(m["username"] != "bob" for m in remaining["items"])
 
         # 不能移除自己（创建者 = admin 登录的 dev）
-        own_id = next(
-            m["user_id"]
-            for m in remaining["items"]
-            if m["username"] == "dev"
-        )
+        own_id = next(m["user_id"] for m in remaining["items"] if m["username"] == "dev")
         self_removal = client.delete(
             f"/api/v1/projects/{project['id']}/members/{own_id}?confirm=true",
             headers=csrf_headers(client),

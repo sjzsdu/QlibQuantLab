@@ -73,9 +73,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.exception_handler(RequestValidationError)
     async def _validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
+        # model_validator 抛出的 ValueError 会原样躺在 ctx.error 里 —— JSON 序列化前字符串化
+        errors = exc.errors()
+        for item in errors:
+            if isinstance(item.get("ctx"), dict):
+                item["ctx"] = {
+                    k: (v if isinstance(v, str | int | float | bool | None) else str(v))
+                    for k, v in item["ctx"].items()
+                }
         return JSONResponse(
             status_code=422,
-            content=_envelope(request, 1422, "请求参数校验失败", {"errors": exc.errors()}),
+            content=_envelope(request, 1422, "请求参数校验失败", {"errors": errors}),
         )
 
     @app.exception_handler(Exception)

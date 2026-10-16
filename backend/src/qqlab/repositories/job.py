@@ -11,7 +11,7 @@ import json
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 
 from qqlab.core.ids import stable_uuid
 from qqlab.models import Backtest, Job, JobLog, JobStatus
@@ -151,6 +151,63 @@ class JobRepository(BaseRepository):
         job.finished_at = datetime.now(tz=UTC)
         await self.session.flush()
 
+    async def mark_canceled(self, job_id: str | uuid.UUID, *, reason: str = "用户取消") -> bool:
+        """running → canceled 的原子 CAS（Core UPDATE ... WHERE status=running）。
+
+        worker 在 progress 检查点调用；API **绝不**直接 UPDATE running 任务（S3-15）。
+        """
+        jid = uuid.UUID(str(job_id))
+        result = await self.session.execute(
+            update(Job)
+            .where(
+                Job.org_id == stable_uuid(self.scope.org_id),
+                Job.id == jid,
+                Job.status == JobStatus.RUNNING,
+            )
+            .values(status=JobStatus.CANCELED, error=reason[:4000], finished_at=datetime.now(tz=UTC))
+            .execution_options(synchronize_session=False)
+        )
+        if not result.rowcount:
+            return False
+        self.session.expire_all()  # Core UPDATE 绕过 ORM，身份映射需失效（sync 方法）
+        return True
+
+    async def mark_canceled_if_queued(self, job_id: str | uuid.UUID, *, reason: str = "用户取消") -> bool:
+        """queued → canceled 的原子 CAS（API 直接取消未开跑的任务；与 worker 抢跑不竞态）。"""
+        jid = uuid.UUID(str(job_id))
+        result = await self.session.execute(
+            update(Job)
+            .where(
+                Job.org_id == stable_uuid(self.scope.org_id),
+                Job.id == jid,
+                Job.status == JobStatus.QUEUED,
+            )
+            .values(status=JobStatus.CANCELED, error=reason[:4000], finished_at=datetime.now(tz=UTC))
+            .execution_options(synchronize_session=False)
+        )
+        if not result.rowcount:
+            return False
+        self.session.expire_all()
+        return True
+
+    async def list_logs(
+        self, job_id: str | uuid.UUID, *, since_seq: int = 0, limit: int = 200
+    ) -> list[JobLog]:
+        """``seq > since_seq`` 的增量日志（按 seq 升序），供前端 2s 轮询。"""
+        jid = uuid.UUID(str(job_id))
+        stmt = (
+            select(JobLog)
+            .where(JobLog.job_id == jid, JobLog.seq > since_seq)
+            .order_by(JobLog.seq.asc())
+            .limit(limit)
+        )
+        return list((await self.session.execute(stmt)).scalars().all())
+
+    async def active_by_kind(self, *, kind: str) -> list[Job]:
+        """当前组织内某 kind 的活跃任务（queued/running），小表全取后由调用方过滤 payload。"""
+        stmt = self._base().where(Job.kind == kind, Job.status.in_([JobStatus.QUEUED, JobStatus.RUNNING]))
+        return list((await self.session.execute(stmt)).scalars().all())
+
     async def append_log(self, job_id: str | uuid.UUID, message: str, *, level: str = "info") -> None:
         jid = uuid.UUID(str(job_id))
         seq = int(
@@ -204,6 +261,39 @@ class BacktestRepository(BaseRepository):
         if job_id is not None:
             bt.job_id = uuid.UUID(str(job_id))
         await self.session.flush()
+
+    async def list(
+        self,
+        *,
+        page: int = 1,
+        page_size: int = 20,
+        strategy_id: str | None = None,
+        project_id: str | None = None,
+    ) -> tuple[list[Backtest], int]:
+        offset, limit = self.page_offsets(page, page_size)
+        stmt = self._base()
+        if strategy_id:
+            stmt = stmt.where(Backtest.strategy_id == stable_uuid(strategy_id))
+        if project_id:
+            stmt = stmt.where(Backtest.project_id == stable_uuid(project_id))
+        total = int(
+            (await self.session.execute(select(func.count()).select_from(stmt.subquery()))).scalar_one()
+        )
+        rows = (
+            (
+                await self.session.execute(
+                    stmt.order_by(Backtest.created_at.desc()).offset(offset).limit(limit)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        return list(rows), total
+
+    async def add(self, backtest: Backtest) -> Backtest:
+        self.session.add(backtest)
+        await self.session.flush()
+        return backtest
 
 
 __all__ = ["BacktestRepository", "JobRepository", "WORKER_ID", "payload_hash"]

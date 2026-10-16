@@ -38,6 +38,7 @@ class AuditAction:
 
     MODEL_CREATE = "model.create"
     MODEL_UPDATE = "model.update"
+    MODEL_DELETE = "model.delete"
     TRAIN_SUBMIT = "train.submit"
 
     STRATEGY_CREATE = "strategy.create"

@@ -359,7 +359,11 @@ class DatasetService(_BaseDataService):
         sources = DataSourceRepository(self._session, self._scope)
         source = await sources.get(str(row.data_source_id))
         license_row = await DataLicenseRepository(self._session, self._scope).get(str(row.license_id))
-        project = await ProjectRepository(self._session, self._scope).get(str(row.project_id)) if row.project_id else None
+        project = (
+            await ProjectRepository(self._session, self._scope).get(str(row.project_id))
+            if row.project_id
+            else None
+        )
         names = await sources.usernames([row.created_by])
         return DatasetOut(
             id=str(row.id),

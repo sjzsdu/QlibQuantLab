@@ -147,10 +147,7 @@ def read_ohlcv(
     rows: list[PreviewRow] = []
     total = 0
     for k in range(max(lo, first_data_idx), hi):
-        values = {
-            name: float(columns[name][k - starts[name]])
-            for name in OHLCV_FIELDS
-        }
+        values = {name: float(columns[name][k - starts[name]]) for name in OHLCV_FIELDS}
         total += 1
         if offset <= total - 1 < offset + limit:
             rows.append(PreviewRow(date=dates[k], values=values))

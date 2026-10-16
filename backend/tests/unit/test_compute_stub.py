@@ -11,7 +11,7 @@ from qqlab.adapters.compute.stub_compute import (
     StubComputeProvider,
     make_synthetic_prices,
 )
-from qqlab.ports.compute import BacktestSpec, CostConfig
+from qqlab.ports.compute import BacktestSpec, CostConfig, FactorSpec, TrainSpec
 
 
 def _spec(**overrides) -> BacktestSpec:
@@ -108,6 +108,87 @@ class TestStubCompute:
 
     async def test_healthcheck(self) -> None:
         assert await StubComputeProvider().healthcheck() is True
+
+
+class TestStubTrainPredict:
+    """阶段 5：stub 训练/预测 —— 与 qlib 同一接口形状（artifact 落/读口径一致）。"""
+
+    @staticmethod
+    async def _noop(pct: int, message: str) -> None:  # noqa: ARG001
+        return None
+
+    def _train_spec(self) -> TrainSpec:
+        return TrainSpec(
+            org_id="dev-org",
+            project_id="00000000-0000-0000-0000-000000000001",
+            dataset_id="00000000-0000-0000-0000-000000000003",
+            model_id="00000000-0000-0000-0000-000000000009",
+            factors=[
+                FactorSpec(
+                    factor_id="f1",
+                    name="mom5",
+                    expression="$close / Ref($close, 5) - 1",
+                    version=1,
+                )
+            ],
+            split={"train": ["2023-01-03", "2023-06-30"], "valid": ["2023-07-03", "2023-12-29"]},
+            algo="lgb",
+        )
+
+    async def test_train_returns_artifact_and_annotations(self) -> None:
+        provider = StubComputeProvider()
+        result = await provider.train(self._train_spec(), self._noop)
+
+        assert result.artifact  # pickle 伪模型字节
+        assert result.artifact_key.endswith("stub_model.pkl")
+        assert result.metrics["engine"] == "stub"
+        assert result.metrics["n_factors"] == 1
+        assert result.data_range["train"] == ["2023-01-03", "2023-06-30"]
+        assert result.data_range["valid"] == ["2023-07-03", "2023-12-29"]
+        assert "伪模型" in result.limitations
+
+    async def test_train_deterministic(self) -> None:
+        provider = StubComputeProvider()
+        r1 = await provider.train(self._train_spec(), self._noop)
+        r2 = await provider.train(self._train_spec(), self._noop)
+        assert r1.artifact == r2.artifact
+        assert r1.metrics == r2.metrics
+
+    async def test_predict_signals_sorted_desc(self) -> None:
+        signals = await StubComputeProvider().predict_signals(_spec(), b"", self._noop)
+        assert signals
+        for _date, scores in signals.items():
+            assert scores == sorted(scores, key=lambda t: -t[1])
+            assert all(isinstance(s, str) for s, _ in scores)
+
+    async def test_run_backtest_model_signal_labels(self) -> None:
+        """注入模型信号 + signal_source=model → metrics/data_range/limitations 全标注。"""
+        provider = StubComputeProvider()
+        signals = await provider.predict_signals(_spec(), b"", self._noop)
+        spec = _spec(signals=signals, signal_source="model")
+        result = await provider.run_backtest(spec, self._noop)
+
+        assert result.metrics["signal_source"] == "model"
+        assert result.data_range["signal_source"] == "model"
+        assert "模型" in result.limitations
+
+    async def test_run_backtest_default_rule_label(self) -> None:
+        result = await StubComputeProvider().run_backtest(_spec(), self._noop)
+        assert result.metrics["signal_source"] == "rule"
+        assert result.data_range["signal_source"] == "rule"
+        assert "动量" in result.limitations
+
+    async def test_curve_key_isolated_by_backtest_id(self) -> None:
+        """同策略多次回测：curve 键按 backtest_id 隔离，不互相覆盖（阶段 5 回归）。"""
+        provider = StubComputeProvider()
+        signals = await provider.predict_signals(_spec(), b"", self._noop)
+        bt1 = _spec(backtest_id="bt-111", signal_source="model", signals=signals)
+        bt2 = _spec(backtest_id="bt-222", signal_source="model", signals=signals)
+        r1 = await provider.run_backtest(bt1, self._noop)
+        r2 = await provider.run_backtest(bt2, self._noop)
+        assert "/bt-111/" in r1.curve_key
+        assert "/bt-222/" in r2.curve_key
+        assert r1.curve_key != r2.curve_key
 
 
 class TestBuildCompute:

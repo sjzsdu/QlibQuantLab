@@ -38,7 +38,11 @@ class DataSourceRepository(BaseRepository):
             (await self.session.execute(select(func.count()).select_from(stmt.subquery()))).scalar_one()
         )
         rows = (
-            (await self.session.execute(stmt.order_by(DataSource.updated_at.desc()).offset(offset).limit(limit)))
+            (
+                await self.session.execute(
+                    stmt.order_by(DataSource.updated_at.desc()).offset(offset).limit(limit)
+                )
+            )
             .scalars()
             .all()
         )
@@ -72,7 +76,9 @@ class DataSourceRepository(BaseRepository):
                 await self.session.execute(
                     select(func.count())
                     .select_from(Dataset)
-                    .where(Dataset.org_id == stable_uuid(self.scope.org_id), Dataset.data_source_id == source_id)
+                    .where(
+                        Dataset.org_id == stable_uuid(self.scope.org_id), Dataset.data_source_id == source_id
+                    )
                 )
             ).scalar_one()
         )
@@ -156,11 +162,7 @@ class DatasetRepository(BaseRepository):
             (await self.session.execute(select(func.count()).select_from(stmt.subquery()))).scalar_one()
         )
         rows = (
-            (
-                await self.session.execute(
-                    stmt.order_by(Dataset.updated_at.desc()).offset(offset).limit(limit)
-                )
-            )
+            (await self.session.execute(stmt.order_by(Dataset.updated_at.desc()).offset(offset).limit(limit)))
             .scalars()
             .all()
         )

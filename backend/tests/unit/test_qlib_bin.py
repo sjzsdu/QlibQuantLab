@@ -18,9 +18,7 @@ DATES = ["2024-01-02", "2024-01-03", "2024-01-04", "2024-01-05"]
 FIELDS = ("open", "high", "low", "close", "volume", "factor")
 
 
-def _write_dataset(
-    root: Path, *, late_instrument: str | None = None, nested: bool = False
-) -> Path:
+def _write_dataset(root: Path, *, late_instrument: str | None = None, nested: bool = False) -> Path:
     """构造 dump_bin 目录：calendars + instruments + features/{inst}/{field}.{freq}.bin。
 
     ``nested=False``（默认）为实测平铺布局（qlib 官方 GetData zip）；

@@ -14,7 +14,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 
-from qqlab.ports.compute import CostConfig
+from qqlab.ports.compute import CostConfig, SignalMap
 
 #: 年化因子：A 股日频
 TRADING_DAYS_PER_YEAR = 252
@@ -32,8 +32,6 @@ class Bar:
 
 #: instrument -> [Bar]（按 date 升序）
 PriceSeries = dict[str, list[Bar]]
-#: date -> [(instrument, score)]（score 降序，由调用方排好）
-SignalMap = dict[str, list[tuple[str, float]]]
 
 
 @dataclass(slots=True)
@@ -298,3 +296,6 @@ def _metrics(nav_curve: list[tuple[str, float]], initial_cash: float) -> dict[st
         "max_drawdown": max_drawdown,
         "calmar": calmar,
     }
+
+
+__all__ = ["Bar", "PriceSeries", "SignalMap", "SimulationResult", "momentum_scores", "run_simulation"]

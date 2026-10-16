@@ -146,7 +146,11 @@ class FactorService:
             action=AuditAction.FACTOR_UPDATE,
             resource_type="factor",
             resource_id=str(row.id),
-            detail={"fields": sorted(payload), "version": row.version, "expression_changed": expression_changed},
+            detail={
+                "fields": sorted(payload),
+                "version": row.version,
+                "expression_changed": expression_changed,
+            },
             user=self._user,
             request_id=self._ctx.request_id,
             ip=self._ctx.ip,

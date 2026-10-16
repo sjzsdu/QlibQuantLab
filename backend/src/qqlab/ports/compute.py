@@ -10,6 +10,9 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
+#: 默认训练目标：次期收益（t+1 相对 t 的收盘收益），qlib 表达式
+DEFAULT_TARGET = "Ref($close, -1) / $close - 1"
+
 
 @dataclass(slots=True)
 class CostConfig:
@@ -68,6 +71,14 @@ class BacktestSpec:
     dataset_id: str
     benchmark: str
     cost: CostConfig
+    #: 回测任务自己的 id：curve 对象键用它隔离（同策略多次回测不互相覆盖）。
+    #: 空串（旧调用/单测直构 spec）时降级用 strategy_id。
+    backtest_id: str = ""
+    #: 信号来源标签："rule"（动量规则）| "model"（绑定模型的样本外预测）
+    signal_source: str = "rule"
+    #: 预计算信号（worker 先 ``predict_signals`` 再注入）；None = 提交方在
+    #: ``run_backtest`` 内部按规则现算。metrics/data_range/limitations 会标注来源。
+    signals: SignalMap | None = None
     split: dict[str, list[str]] = field(default_factory=dict)
     topk: int = 50
     params: dict[str, Any] = field(default_factory=dict)
@@ -85,7 +96,51 @@ class BacktestResult:
     limitations: str
 
 
+@dataclass(slots=True)
+class FactorSpec:
+    """训练/预测用的单个因子（``factor_snapshot`` 的一条，含版本可复现）。"""
+
+    factor_id: str
+    name: str
+    expression: str
+    version: int
+
+
+@dataclass(slots=True)
+class TrainSpec:
+    """训练输入：数据集 + 因子表达式快照 + 切分 + 超参。
+
+    ``split``：``{"train": [start, end], "valid": [start, end], "test": [start, end]}``
+    （日期 ISO 串；``test`` 可空 —— 阶段 5 只在 train/valid 上训练与选轮）。
+    ``target``：qlib 表达式，预测目标（默认次期收益，见 ``DEFAULT_TARGET``）。
+    """
+
+    org_id: str
+    project_id: str
+    dataset_id: str
+    model_id: str
+    factors: list[FactorSpec]
+    split: dict[str, list[str]] = field(default_factory=dict)
+    algo: str = "LGBModel"
+    hyperparams: dict[str, Any] = field(default_factory=dict)
+    target: str = DEFAULT_TARGET
+    max_instruments: int = 0  # 0 = 不截断（训练默认小 universe 由调用方给）
+
+
+@dataclass(slots=True)
+class TrainResult:
+    metrics: dict[str, Any]
+    data_range: dict[str, Any]
+    #: 模型权重的 joblib 字节（``train`` 落对象存储，``predict`` 直接反序列化）
+    artifact: bytes
+    artifact_key: str
+    limitations: str
+
+
 ProgressCallback = Callable[[int, str], Awaitable[None]]
+
+#: date -> [(instrument, score)]（score 降序，由调用方排好）
+SignalMap = dict[str, list[tuple[str, float]]]
 
 
 @runtime_checkable
@@ -95,5 +150,11 @@ class ComputePort(Protocol):
     name: str  # "qlib" | "stub"
 
     async def run_backtest(self, spec: BacktestSpec, progress: ProgressCallback) -> BacktestResult: ...
+
+    async def train(self, spec: TrainSpec, progress: ProgressCallback) -> TrainResult: ...
+
+    async def predict_signals(
+        self, spec: BacktestSpec, model_artifact: bytes, progress: ProgressCallback
+    ) -> SignalMap: ...
 
     async def healthcheck(self) -> bool: ...
