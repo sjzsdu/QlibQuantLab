@@ -3,15 +3,20 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Generic, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field
+
+T = TypeVar("T")
 
 
 class ORMModel(BaseModel):
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
 
-class PageOut[T](BaseModel):
+# 注意：worker 容器钉在 Python 3.11（qlib 依赖），此处必须用 Generic[T]（3.11 兼容），
+# 不能用 PEP 695 的 class PageOut[T]（3.12+ 语法，worker 导入即 SyntaxError）。
+class PageOut(BaseModel, Generic[T]):  # noqa: UP046 — 故意不用 PEP 695（worker 是 3.11）
     items: list[T]
     total: int
     page: int

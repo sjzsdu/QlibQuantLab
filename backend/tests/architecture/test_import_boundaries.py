@@ -210,3 +210,22 @@ def test_api_process_never_loads_qlib_module() -> None:
     )
     assert proc.returncode == 0, f"stderr={proc.stderr}\nstdout={proc.stdout}"
     assert "ok" in proc.stdout
+
+
+def test_no_pep695_syntax_for_worker_python311() -> None:
+    """worker 容器钉在 Python 3.11（qlib 依赖）：src/ 禁用 PEP 695 泛型语法（3.12+）。
+
+    实机踩坑（阶段 5）：`class PageOut[T]` 在宿主 3.12 测试全绿，但 worker 导入
+    qqlab.schemas 即 SyntaxError 崩溃循环 —— 宿主测试无法发现，必须静态守住。
+    """
+    offenders: list[str] = []
+    for path in sorted(SRC.rglob("*.py")):
+        rel = path.relative_to(SRC)
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef):
+                if getattr(node, "type_params", None):
+                    offenders.append(f"{rel}:{node.lineno} {node.name}[]（PEP 695 泛型）")
+            elif isinstance(node, ast.TypeAlias):  # type X = ...（3.12+）
+                offenders.append(f"{rel}:{node.lineno} type ...（3.12+ 别名语法）")
+    assert not offenders, "worker=Python 3.11，禁止 3.12+ 语法:\n" + "\n".join(offenders)
