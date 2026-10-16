@@ -323,3 +323,210 @@ export interface ProjectMember {
   role: string;
   added_at?: string | null;
 }
+
+// ------------------------------------------------------------------ 阶段 5：模型 / 训练
+/** 因子快照条目（创建模型时固化，后续改因子不影响） */
+export interface FactorSnapshotItem {
+  factor_id: string;
+  name: string;
+  expression: string;
+  version: number;
+  factor_type: string;
+}
+
+export interface TrainingRunBrief {
+  id: string;
+  job_id?: string | null;
+  job_status?: string | null;
+  created_at: string;
+  finished_at?: string | null;
+}
+
+export type ModelStatus = "draft" | "training" | "trained" | "failed";
+
+/** GET /api/v1/models */
+export interface Model {
+  id: string;
+  project_id: string;
+  project_name?: string | null;
+  dataset_id: string;
+  dataset_name?: string | null;
+  name: string;
+  algo: string;
+  hyperparams: Record<string, unknown>;
+  training_config: Record<string, unknown>;
+  factor_snapshot: FactorSnapshotItem[];
+  status: ModelStatus;
+  last_run?: TrainingRunBrief | null;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateModelInput {
+  project_id: string;
+  dataset_id: string;
+  name: string;
+  algo?: string;
+  factor_ids: string[];
+  hyperparams?: Record<string, unknown>;
+  target?: string;
+}
+
+/** GET /api/v1/models/catalog（静态目录，偏差登记 docs/stage5/06-risks.md） */
+export interface ModelCatalogItem {
+  algo: string;
+  label: string;
+  available: boolean;
+  note?: string;
+}
+
+/** POST /api/v1/models/{id}/train */
+export interface TrainSubmitReceipt {
+  job_id: string;
+  training_run_id: string;
+  split: { train: string[]; valid?: string[] };
+  status: string;
+}
+
+/** GET /api/v1/training-runs（data_range 内含四标注：切分/引擎/数据来源授权/limitations） */
+export interface TrainingRun {
+  id: string;
+  model_id: string;
+  model_name?: string | null;
+  dataset_id: string;
+  job_id?: string | null;
+  job_status?: string | null;
+  metrics: Record<string, number | string>;
+  data_range: Record<string, unknown>;
+  artifact_uri?: string | null;
+  created_at: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+}
+
+// ------------------------------------------------------------------ 阶段 5：策略
+export type SignalSource = "rule" | "model";
+
+/** GET /api/v1/strategies */
+export interface Strategy {
+  id: string;
+  project_id: string;
+  project_name?: string | null;
+  model_id?: string | null;
+  model_name?: string | null;
+  name: string;
+  description?: string | null;
+  signal_source: SignalSource;
+  signal_config: Record<string, unknown>;
+  visibility: Visibility;
+  is_public: boolean;
+  version: number;
+  published_at?: string | null;
+  published_by?: string | null;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateStrategyInput {
+  project_id: string;
+  name: string;
+  description?: string;
+  signal_source?: SignalSource;
+  model_id?: string;
+  lookback?: number;
+}
+
+// ------------------------------------------------------------------ 阶段 5：回测
+/** 费用三件套必填（后端 422 校验），其余为交易所常规默认 */
+export interface CostConfig {
+  commission_rate: number;
+  slippage_value: number;
+  impact_rate_per_million: number;
+  slippage_type?: "fixed_bp";
+  min_commission?: number;
+  settlement_fee_rate?: number;
+  stamp_duty_sell?: number;
+}
+
+/** 数据来源/授权四标注第 4 项（data_range.source） */
+export interface ResultSourceAnnotation {
+  dataset_id?: string;
+  dataset_name?: string;
+  data_source_id?: string;
+  vendor?: string | null;
+  license_ref?: string | null;
+  allowed_use?: string | null;
+  redistribution_allowed?: boolean | null;
+}
+
+/** GET /api/v1/backtests（metrics/data_range 携带四标注） */
+export interface Backtest {
+  id: string;
+  project_id: string;
+  project_name?: string | null;
+  strategy_id: string;
+  strategy_name?: string | null;
+  dataset_id: string;
+  dataset_name?: string | null;
+  job_id?: string | null;
+  job_status?: string | null;
+  benchmark: string;
+  cost_config: CostConfig;
+  params: Record<string, unknown>;
+  split_config: Record<string, unknown>;
+  metrics: Record<string, number | string>;
+  data_range: Record<string, unknown> & {
+    source?: ResultSourceAnnotation;
+    signal_source?: SignalSource;
+  };
+  limitations?: string | null;
+  curve_uri?: string | null;
+  start_date?: string | null;
+  end_date?: string | null;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateBacktestInput {
+  strategy_id: string;
+  dataset_id: string;
+  benchmark?: string;
+  start_date?: string;
+  end_date?: string;
+  topk?: number;
+  max_instruments?: number;
+  cost_config: CostConfig;
+}
+
+/** GET /api/v1/backtests/{id}/curve（≤1500 点降采样） */
+export interface BacktestCurve {
+  points: [string, number][];
+  total: number;
+  downsampled: boolean;
+}
+
+// ------------------------------------------------------------------ 阶段 5：任务中心
+export interface JobLog {
+  seq: number;
+  level: string;
+  message: string;
+  created_at: string;
+}
+
+/** GET /api/v1/jobs/{id}/logs?since_seq=N（2s 增量轮询） */
+export interface JobLogs {
+  items: JobLog[];
+  next_seq: number;
+  status: JobStatus;
+  progress: number;
+}
+
+/** POST /api/v1/jobs/{id}/cancel | retry */
+export interface JobAction {
+  id: string;
+  status: string;
+  detail?: string | null;
+}

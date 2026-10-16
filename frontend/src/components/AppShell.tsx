@@ -14,12 +14,16 @@ import {
   Typography,
 } from "antd";
 import {
+  AimOutlined,
   DashboardOutlined,
   DatabaseOutlined,
   ExperimentOutlined,
   FileSearchOutlined,
   FolderOpenOutlined,
+  LineChartOutlined,
   LogoutOutlined,
+  OrderedListOutlined,
+  RobotOutlined,
   SafetyCertificateOutlined,
   UserOutlined,
 } from "@ant-design/icons";
@@ -58,6 +62,10 @@ export function AppShell({ children }: AppShellProps) {
       { key: "/projects", icon: <FolderOpenOutlined />, label: "项目管理" },
       { key: "/data", icon: <DatabaseOutlined />, label: "数据管理" },
       { key: "/factors", icon: <ExperimentOutlined />, label: "因子库" },
+      { key: "/models", icon: <RobotOutlined />, label: "模型训练" },
+      { key: "/strategies", icon: <AimOutlined />, label: "策略管理" },
+      { key: "/backtests", icon: <LineChartOutlined />, label: "回测分析" },
+      { key: "/jobs", icon: <OrderedListOutlined />, label: "任务中心" },
       { key: "/audit", icon: <FileSearchOutlined />, label: "审计日志" },
       {
         key: "legal-group",
@@ -77,7 +85,7 @@ export function AppShell({ children }: AppShellProps) {
   /** 选中高亮：子路由（/data/datasets/{id}）回退到父菜单项 */
   const selectedKeys = useMemo(() => {
     if (pathname === "/") return ["/"];
-    const parents = ["/projects", "/data", "/factors", "/audit"];
+    const parents = ["/projects", "/data", "/factors", "/models", "/strategies", "/backtests", "/jobs", "/audit"];
     const hit = parents.find((k) => pathname === k || pathname.startsWith(`${k}/`));
     return [hit ?? pathname];
   }, [pathname]);
