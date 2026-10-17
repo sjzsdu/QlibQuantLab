@@ -6,12 +6,13 @@
  * 任务进行中每 2s 轮询，终态后拉取曲线。
  */
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import dynamic from "next/dynamic";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   Alert,
+  App,
   Button,
   Card,
   Col,
@@ -25,10 +26,12 @@ import {
   Tag,
   Typography,
 } from "antd";
-import { ArrowLeftOutlined } from "@ant-design/icons";
+import { ArrowLeftOutlined, DownloadOutlined, PrinterOutlined } from "@ant-design/icons";
 import { AppShell } from "@/components/AppShell";
 import { RequireAuth } from "@/components/RequireAuth";
 import { useApiQuery } from "@/hooks/useApi";
+import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { apiDownload, buildQuery } from "@/lib/api";
 import type { Backtest, BacktestCurve, Job, ResultSourceAnnotation } from "@/lib/types";
 import dayjs from "dayjs";
 
@@ -55,7 +58,11 @@ function pct(value: number | undefined): string {
 
 function BacktestDetailContent({ id }: { id: string }) {
   const router = useRouter();
+  const { modal, message } = App.useApp();
   const queryClient = useQueryClient();
+  const { hasPermission } = useCurrentUser();
+  const canExport = hasPermission("backtest.export");
+  const [exporting, setExporting] = useState<"report" | "positions" | null>(null);
 
   const backtest = useApiQuery<Backtest>(["backtest", id], `/v1/backtests/${id}`);
 
@@ -87,6 +94,37 @@ function BacktestDetailContent({ id }: { id: string }) {
     `/v1/backtests/${id}/curve`,
     { enabled: finished },
   );
+
+  /** 导出 CSV（二次确认 → 下载）；导出动作本身由后端记入审计日志 */
+  const handleExport = (section: "report" | "positions") => {
+    const isPositions = section === "positions";
+    modal.confirm({
+      title: isPositions ? "导出持仓明细为 CSV？" : "导出回测报告为 CSV？",
+      content: isPositions
+        ? "包含回测区间内每个交易日的持仓（日期、标的、股数），逐日可追溯。导出行为会记入审计日志。"
+        : "包含元信息、参数、指标、费用三件套、数据区间与来源授权链、局限与风险提示。导出行为会记入审计日志。",
+      okText: "确认导出",
+      cancelText: "取消",
+      onOk: async () => {
+        setExporting(section);
+        try {
+          const filename = await apiDownload(
+            `/v1/backtests/${id}/export${buildQuery({
+              format: "csv",
+              section,
+              confirm: "true",
+            })}`,
+            isPositions ? "positions.csv" : "backtest_report.csv",
+          );
+          message.success(`已开始下载 ${filename}`);
+        } catch (e) {
+          message.error(e instanceof Error ? e.message : "导出失败");
+        } finally {
+          setExporting(null);
+        }
+      },
+    });
+  };
 
   if (backtest.isLoading) {
     return <Spin style={{ display: "block", margin: "48px auto" }} size="large" />;
@@ -123,6 +161,7 @@ function BacktestDetailContent({ id }: { id: string }) {
     ["频率 / 天数", `${String(range.freq ?? "day")} / ${String(range.n_days ?? "—")}`],
     ["引擎", String(range.engine ?? "—")],
     ["标的数", String(range.instruments ?? "—")],
+    ["股票池", String(range.universe ?? "all")],
     ["Top-K", String(range.topk ?? "—")],
     ["信号来源", range.signal_source === "model" ? "模型信号" : "规则信号（动量）"],
     ...(range.training_run_id
@@ -150,11 +189,42 @@ function BacktestDetailContent({ id }: { id: string }) {
           </Space>
         }
         extra={
-          row.job_id ? (
-            <Button type="link" onClick={() => router.push(`/jobs/${row.job_id}`)}>
-              查看任务日志
-            </Button>
-          ) : null
+          <Space wrap className="no-print" size={4}>
+            {finished && canExport ? (
+              <>
+                <Button
+                  size="small"
+                  icon={<DownloadOutlined />}
+                  loading={exporting === "report"}
+                  onClick={() => handleExport("report")}
+                >
+                  导出报告 CSV
+                </Button>
+                <Button
+                  size="small"
+                  icon={<DownloadOutlined />}
+                  loading={exporting === "positions"}
+                  disabled={!row.positions_uri}
+                  title={
+                    row.positions_uri ? undefined : "该回测尚无持仓明细（任务未完成或早于该功能上线）"
+                  }
+                  onClick={() => handleExport("positions")}
+                >
+                  持仓明细 CSV
+                </Button>
+              </>
+            ) : null}
+            {finished ? (
+              <Button size="small" icon={<PrinterOutlined />} onClick={() => window.print()}>
+                打印版
+              </Button>
+            ) : null}
+            {row.job_id ? (
+              <Button type="link" size="small" onClick={() => router.push(`/jobs/${row.job_id}`)}>
+                查看任务日志
+              </Button>
+            ) : null}
+          </Space>
         }
       >
         <Descriptions column={{ xs: 1, sm: 2, lg: 4 }} size="small">
@@ -314,6 +384,18 @@ function BacktestDetailContent({ id }: { id: string }) {
               style={{ whiteSpace: "pre-wrap" }}
             />
           </Card>
+
+          {/* 打印版页脚：屏幕隐藏，打印时补上报告出处与固定风险提示 */}
+          <div className="print-only" style={{ marginTop: 16, fontSize: 12, lineHeight: 1.8 }}>
+            <Paragraph style={{ marginBottom: 4 }}>
+              报告编号：{row.id} ｜ 打印时间：{dayjs().format("YYYY-MM-DD HH:mm:ss")} ｜ 数据集：
+              {row.dataset_name ?? row.dataset_id} ｜ 策略：{row.strategy_name ?? row.strategy_id}
+            </Paragraph>
+            <Paragraph strong style={{ marginBottom: 0 }}>
+              风险提示：本平台不提供任何投资建议，不保证任何策略收益，投资风险由用户自行承担；
+              历史回测不代表未来收益。
+            </Paragraph>
+          </div>
         </>
       ) : row.job_status === "failed" || row.job_status === "canceled" ? (
         <Alert

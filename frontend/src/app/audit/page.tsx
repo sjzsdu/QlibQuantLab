@@ -16,13 +16,18 @@ import {
   Table,
   Tag,
   Typography,
+  App,
 } from "antd";
-import { SearchOutlined, ReloadOutlined } from "@ant-design/icons";
+import {
+  SearchOutlined,
+  ReloadOutlined,
+  DownloadOutlined,
+} from "@ant-design/icons";
 import { AppShell } from "@/components/AppShell";
 import { RequireAuth } from "@/components/RequireAuth";
 import { EmptyState } from "@/components/EmptyState";
 import { useApiQuery } from "@/hooks/useApi";
-import { buildQuery } from "@/lib/api";
+import { apiDownload, buildQuery } from "@/lib/api";
 import type { AuditLog, Paged } from "@/lib/types";
 import dayjs from "dayjs";
 
@@ -46,7 +51,9 @@ function AuditPageContent() {
   const [filters, setFilters] = useState<Filters>({ action: "", actor: "" });
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
+  const [exporting, setExporting] = useState(false);
   const [form] = Form.useForm<Filters>();
+  const { message, modal } = App.useApp();
 
   const query = useApiQuery<Paged<AuditLog>>(
     ["audit-logs", filters.action, filters.actor, page, pageSize],
@@ -70,6 +77,39 @@ function AuditPageContent() {
     form.resetFields();
     setPage(1);
     setFilters({ action: "", actor: "" });
+  };
+
+  /** 导出 CSV（二次确认 → 带当前筛选条件请求流式下载） */
+  const handleExport = () => {
+    const scopeText =
+      filters.action || filters.actor
+        ? `当前筛选：动作=${filters.action || "全部"}，操作人=${filters.actor || "全部"}。`
+        : "将导出本组织全部审计记录。";
+    modal.confirm({
+      title: "导出审计日志为 CSV？",
+      content: `${scopeText}导出行为本身会记入审计日志。`,
+      okText: "确认导出",
+      cancelText: "取消",
+      onOk: async () => {
+        setExporting(true);
+        try {
+          const filename = await apiDownload(
+            `/v1/audit-logs/export${buildQuery({
+              format: "csv",
+              confirm: "true",
+              action: filters.action,
+              actor: filters.actor,
+            })}`,
+            "audit_logs.csv",
+          );
+          message.success(`已开始下载 ${filename}`);
+        } catch (e) {
+          message.error(e instanceof Error ? e.message : "导出失败");
+        } finally {
+          setExporting(false);
+        }
+      },
+    });
   };
 
   const columns = [
@@ -123,14 +163,17 @@ function AuditPageContent() {
       dataIndex: "detail",
       key: "detail",
       ellipsis: true,
-      render: (value: string | null) =>
-        value ? (
-          <Text type="secondary" style={{ fontSize: 12 }} title={value}>
-            {value}
+      // 后端 detail 是 JSON 对象（如 auth.login 的 {roles, provider}），
+      // 直接当 React child 渲染会崩 —— 统一压成紧凑 JSON 文本
+      render: (value: unknown) => {
+        if (value === null || value === undefined || value === "") return "-";
+        const text = typeof value === "string" ? value : JSON.stringify(value);
+        return (
+          <Text type="secondary" style={{ fontSize: 12 }} title={text}>
+            {text}
           </Text>
-        ) : (
-          "-"
-        ),
+        );
+      },
     },
     {
       title: "IP",
@@ -196,6 +239,13 @@ function AuditPageContent() {
               </Button>
               <Button icon={<ReloadOutlined />} onClick={handleReset}>
                 重置
+              </Button>
+              <Button
+                icon={<DownloadOutlined />}
+                loading={exporting}
+                onClick={handleExport}
+              >
+                导出 CSV
               </Button>
             </Space>
           </Form.Item>

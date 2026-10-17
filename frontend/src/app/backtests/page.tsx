@@ -5,7 +5,7 @@
  * 模型信号策略提交前需已有成功训练（后端 409 前置拦截，前端透传错误）。
  */
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   App,
   Button,
@@ -29,7 +29,7 @@ import { RequireAuth } from "@/components/RequireAuth";
 import { useApiMutation, useApiQuery, type ApiMutationInput } from "@/hooks/useApi";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { buildQuery } from "@/lib/api";
-import type { Backtest, Dataset, Paged, Strategy } from "@/lib/types";
+import type { Backtest, Dataset, DatasetUniverses, Paged, Strategy } from "@/lib/types";
 
 const { Paragraph } = Typography;
 
@@ -47,6 +47,7 @@ type BacktestFormValues = {
   benchmark?: string;
   range?: [Dayjs, Dayjs];
   topk?: number;
+  universe?: string;
   commission_rate: number;
   slippage_value: number;
   impact_rate_per_million: number;
@@ -75,6 +76,36 @@ function BacktestsPageContent() {
     `/v1/datasets${buildQuery({ page_size: 200 })}`,
   );
   const submitBacktest = useApiMutation<Backtest, ApiMutationInput>();
+
+  // 股票池（阶段 6 D6）：跟随已选数据集拉取 instruments/*.txt 清单
+  const watchedDatasetId = Form.useWatch("dataset_id", form);
+  const universes = useApiQuery<DatasetUniverses>(
+    ["backtest-universes", watchedDatasetId ?? ""],
+    `/v1/datasets/${watchedDatasetId}/universes`,
+    { enabled: Boolean(watchedDatasetId) },
+  );
+  const universeOptions = useMemo(() => {
+    const items = universes.data?.items ?? [];
+    if (!items.length) return [{ value: "all", label: "all（全市场，含指数）" }];
+    return items.map((u) => ({
+      value: u.name,
+      label:
+        u.name === "all"
+          ? `all（全市场，含指数，${u.instruments} 只）`
+          : `${u.name}（${u.instruments} 只）`,
+    }));
+  }, [universes.data]);
+
+  // 股票池默认 csi300（提示：已排除指数）；数据集无该池则退回第一个可用池
+  useEffect(() => {
+    if (!modalOpen || !universeOptions.length) return;
+    const current = form.getFieldValue("universe");
+    if (current && universeOptions.some((o) => o.value === current)) return;
+    const preferred = universeOptions.some((o) => o.value === "csi300")
+      ? "csi300"
+      : universeOptions[0].value;
+    form.setFieldsValue({ universe: preferred });
+  }, [universeOptions, form, modalOpen]);
 
   const strategyOptions = useMemo(
     () =>
@@ -106,6 +137,7 @@ function BacktestsPageContent() {
           start_date: values.range?.[0]?.format("YYYY-MM-DD"),
           end_date: values.range?.[1]?.format("YYYY-MM-DD"),
           topk: values.topk ?? 50,
+          universe: values.universe || "csi300",
           cost_config: {
             commission_rate: values.commission_rate,
             slippage_value: values.slippage_value,
@@ -266,6 +298,13 @@ function BacktestsPageContent() {
               showSearch
               optionFilterProp="label"
             />
+          </Form.Item>
+          <Form.Item
+            name="universe"
+            label="股票池"
+            extra="all 含指数代码（SH000300 等）；成分池为数据集 instruments 文件静态快照"
+          >
+            <Select options={universeOptions} loading={universes.isLoading} />
           </Form.Item>
           <Space size={16} wrap>
             <Form.Item name="benchmark" label="基准">

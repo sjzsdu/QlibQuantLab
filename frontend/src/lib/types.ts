@@ -94,6 +94,7 @@ export interface DeleteResult {
 }
 
 /** GET /api/v1/audit-logs */
+/** GET /api/v1/audit-logs，detail 为 JSON 对象（部分 action 也可能为字符串/空） */
 export interface AuditLog {
   id: string;
   action: string;
@@ -101,7 +102,7 @@ export interface AuditLog {
   resource_id?: string | null;
   outcome: string;
   actor_username?: string | null;
-  detail?: string | null;
+  detail?: unknown;
   ip?: string | null;
   request_id?: string | null;
   created_at: string;
@@ -264,6 +265,11 @@ export interface DatasetCalendar {
   end?: string | null;
 }
 
+export interface DatasetUniverses {
+  dataset_id: string;
+  items: { name: string; instruments: number }[];
+}
+
 // ------------------------------------------------------------------ 阶段 4：因子域
 export interface Factor {
   id: string;
@@ -286,6 +292,43 @@ export interface CreateFactorInput {
   name: string;
   expression: string;
   description?: string;
+}
+
+/** POST /api/v1/factors/{id}/compute（阶段 6：IC 预览） */
+export interface FactorComputeSubmitInput {
+  dataset_id: string;
+  start_date?: string;
+  end_date?: string;
+  /** 股票池名（数据集 instruments/ 下），默认 all；前端下拉默认 csi300 */
+  universe?: string;
+  max_instruments?: number;
+}
+
+/** GET /api/v1/factors/{id}/compute-runs */
+export interface FactorComputeRun {
+  id: string;
+  factor_id: string;
+  project_id: string;
+  dataset_id: string;
+  dataset_name?: string | null;
+  job_id?: string | null;
+  job_status?: string | null;
+  /** coverage + IC 汇总（ic_mean / ic_std / ic_ir / ic_positive_ratio / n_days） */
+  metrics: Record<string, number>;
+  /** 四标注：区间 + 引擎 + 表达式快照 + 股票池 + 来源授权 source + limitations */
+  data_range: Record<string, unknown> & { source?: ResultSourceAnnotation };
+  ic_uri?: string | null;
+  values_uri?: string | null;
+  created_at: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+}
+
+/** GET /api/v1/factors/{id}/compute-runs/{runId}/ic-curve（≤1500 点降采样） */
+export interface IcCurve {
+  points: [string, number][];
+  total: number;
+  downsampled: boolean;
 }
 
 /** POST /api/v1/factors/validate（静态校验，不落库） */
@@ -483,6 +526,8 @@ export interface Backtest {
   };
   limitations?: string | null;
   curve_uri?: string | null;
+  /** 持仓明细对象键（阶段 6）：非空时可导出 positions.csv */
+  positions_uri?: string | null;
   start_date?: string | null;
   end_date?: string | null;
   created_by: string;
@@ -498,6 +543,8 @@ export interface CreateBacktestInput {
   end_date?: string;
   topk?: number;
   max_instruments?: number;
+  /** 股票池名（数据集 instruments/ 下），默认 all；前端下拉默认 csi300 */
+  universe?: string;
   cost_config: CostConfig;
 }
 

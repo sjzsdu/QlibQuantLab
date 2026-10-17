@@ -44,7 +44,7 @@ const ROLE_COLORS: Record<string, string> = {
   auditor: "purple",
 };
 
-const LEGAL_KEYS = ["/legal/terms", "/legal/risk", "/legal/disclaimer"];
+const LEGAL_KEYS = ["/legal", "/legal/terms", "/legal/risk", "/legal/disclaimer"];
 
 /** 全站布局：侧边栏菜单 + 顶栏（当前用户 / 组织 / 角色 / 登出） */
 export function AppShell({ children }: AppShellProps) {
@@ -73,6 +73,7 @@ export function AppShell({ children }: AppShellProps) {
         label: "合规文本",
         type: "group" as const,
         children: [
+          { key: "/legal", label: "全部文件" },
           { key: "/legal/terms", label: "用户协议" },
           { key: "/legal/risk", label: "风险提示" },
           { key: "/legal/disclaimer", label: "免责声明" },
@@ -107,6 +108,7 @@ export function AppShell({ children }: AppShellProps) {
         collapsedWidth={0}
         theme="light"
         width={220}
+        className="app-sider"
         style={{ borderRight: "1px solid #f0f0f0" }}
       >
         <div
@@ -137,6 +139,7 @@ export function AppShell({ children }: AppShellProps) {
 
       <Layout>
         <Header
+          className="app-header"
           style={{
             background: "#fff",
             paddingInline: 24,

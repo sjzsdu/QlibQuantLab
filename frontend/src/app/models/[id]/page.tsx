@@ -20,6 +20,7 @@ import {
   InputNumber,
   Modal,
   Progress,
+  Select,
   Space,
   Spin,
   Table,
@@ -36,6 +37,7 @@ import { useApiMutation, useApiQuery, type ApiMutationInput } from "@/hooks/useA
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { buildQuery } from "@/lib/api";
 import type {
+  DatasetUniverses,
   Job,
   Model,
   Paged,
@@ -83,6 +85,14 @@ function RunAnnotations({ run }: { run: TrainingRun }) {
         <Descriptions.Item label="因子数">
           {range.n_factors !== undefined ? String(range.n_factors) : "—"}
         </Descriptions.Item>
+        {range.reuse_factor_values ? (
+          <Descriptions.Item label="因子值来源" span={2}>
+            复用已计算的因子值（与因子页 IC 预览同源）
+            {Array.isArray(range.factor_value_runs) && (range.factor_value_runs as string[]).length > 0
+              ? `：${(range.factor_value_runs as string[]).map((r) => r.slice(0, 8)).join("、")}`
+              : ""}
+          </Descriptions.Item>
+        ) : null}
         <Descriptions.Item label="数据源 / 供应商">
           {source.vendor ?? source.dataset_name ?? "—"}
         </Descriptions.Item>
@@ -112,6 +122,8 @@ type TrainFormValues = {
   train_range?: [Dayjs, Dayjs];
   valid_range?: [Dayjs, Dayjs];
   max_instruments?: number;
+  universe?: string;
+  reuse: boolean;
 };
 
 function ModelDetailContent({ id }: { id: string }) {
@@ -152,8 +164,42 @@ function ModelDetailContent({ id }: { id: string }) {
   }, [job?.status, id, queryClient]);
 
   const submitTrain = useApiMutation<TrainSubmitReceipt, ApiMutationInput>();
+
+  // 股票池（阶段 6 D6）：训练绑定模型的数据集，拉其 instruments/*.txt 清单
+  const trainDatasetId = model.data?.dataset_id ?? "";
+  const universes = useApiQuery<DatasetUniverses>(
+    ["model-train-universes", trainDatasetId],
+    `/v1/datasets/${trainDatasetId}/universes`,
+    { enabled: Boolean(trainDatasetId) },
+  );
+  const universeOptions = useMemo(() => {
+    const items = universes.data?.items ?? [];
+    if (!items.length) return [{ value: "all", label: "all（全市场，含指数）" }];
+    return items.map((u) => ({
+      value: u.name,
+      label:
+        u.name === "all"
+          ? `all（全市场，含指数，${u.instruments} 只）`
+          : `${u.name}（${u.instruments} 只）`,
+    }));
+  }, [universes.data]);
+
+  useEffect(() => {
+    if (!trainModalOpen || !universeOptions.length) return;
+    const current = form.getFieldValue("universe");
+    if (current && universeOptions.some((o) => o.value === current)) return;
+    const preferred = universeOptions.some((o) => o.value === "csi300")
+      ? "csi300"
+      : universeOptions[0].value;
+    form.setFieldsValue({ universe: preferred });
+  }, [universeOptions, form, trainModalOpen]);
+
   const onTrain = async (values: TrainFormValues) => {
-    const body: Record<string, unknown> = { max_instruments: values.max_instruments ?? 0 };
+    const body: Record<string, unknown> = {
+      max_instruments: values.max_instruments ?? 0,
+      universe: values.universe || "csi300",
+      reuse_factor_values: values.reuse === true,
+    };
     if (values.custom_split && values.train_range) {
       body.split = {
         train: [
@@ -396,7 +442,7 @@ function ModelDetailContent({ id }: { id: string }) {
             <Form
               form={form}
               layout="vertical"
-              initialValues={{ custom_split: false, max_instruments: 0 }}
+              initialValues={{ custom_split: false, max_instruments: 0, reuse: false }}
               onFinish={(v) => void onTrain(v)}
             >
               <Form.Item
@@ -433,6 +479,20 @@ function ModelDetailContent({ id }: { id: string }) {
                 extra="0 = 全量；小样本冒烟/调参时可截断（如 50）"
               >
                 <InputNumber min={0} max={20000} style={{ width: "100%" }} />
+              </Form.Item>
+              <Form.Item
+                name="universe"
+                label="股票池"
+                extra="all 含指数代码（SH000300 等）；成分池为数据集 instruments 文件静态快照"
+              >
+                <Select options={universeOptions} loading={universes.isLoading} />
+              </Form.Item>
+              <Form.Item
+                name="reuse"
+                valuePropName="checked"
+                extra="开启后读取因子页「计算 IC」落库的因子值（同版本，values.csv.gz）而非训练时重算表达式；任一因子无同版本的已完成计算记录时提交会被拒绝（不静默回退）"
+              >
+                <Checkbox>复用已计算的因子值（与 IC 预览同源）</Checkbox>
               </Form.Item>
             </Form>
           </Modal>

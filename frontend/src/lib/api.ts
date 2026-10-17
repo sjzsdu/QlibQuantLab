@@ -155,3 +155,81 @@ export function buildQuery(
   const qs = search.toString();
   return qs ? `?${qs}` : "";
 }
+
+/**
+ * 下载类请求（CSV 导出等）：响应可能是文件流，也可能是错误信封。
+ *
+ * - 2xx + 文件流 → 解析 Content-Disposition 文件名，触发浏览器保存；
+ * - 其它状态 → 按统一信封解出 ApiError（400 confirm / 403 权限 与其它接口一致）。
+ */
+export async function apiDownload(
+  path: string,
+  fallbackFilename: string,
+): Promise<string> {
+  let res: Response;
+  try {
+    res = await fetch(`${BASE_URL}${path}`, {
+      method: "GET",
+      headers: { Accept: "text/csv,application/json" },
+      credentials: "include",
+      cache: "no-store",
+    });
+  } catch {
+    throw new ApiError("网络异常：无法连接后端服务，请稍后重试", -1, 0);
+  }
+
+  if (res.status === 401) {
+    redirectToLogin();
+  }
+
+  const contentType = res.headers.get("content-type") ?? "";
+  if (res.ok && (contentType.includes("text/csv") || contentType.includes("application/octet-stream"))) {
+    const blob = await res.blob();
+    const filename = filenameFromDisposition(
+      res.headers.get("content-disposition"),
+      fallbackFilename,
+    );
+    saveBlob(blob, filename);
+    return filename;
+  }
+
+  // 失败分支：后端返回统一 JSON 信封
+  let message = `下载失败（HTTP ${res.status}）`;
+  let code = -1;
+  let requestId: string | undefined;
+  try {
+    const envelope = (await res.json()) as Partial<Envelope<unknown>>;
+    if (typeof envelope.code === "number") {
+      code = envelope.code;
+      message = envelope.message || message;
+      requestId = envelope.request_id;
+    }
+  } catch {
+    /* 保留默认信息 */
+  }
+  throw new ApiError(message, code, res.status, requestId);
+}
+
+/** 从 Content-Disposition 提取 filename（无则用兜底名） */
+function filenameFromDisposition(header: string | null, fallback: string): string {
+  if (!header) return fallback;
+  const match = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(header);
+  if (!match) return fallback;
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    return match[1];
+  }
+}
+
+/** 临时 object URL 触发浏览器保存，随后立即释放 */
+function saveBlob(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}

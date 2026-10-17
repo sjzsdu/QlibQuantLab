@@ -93,3 +93,41 @@ a:hover {
   padding: 1px 6px;
   border-radius: 4px;
 }
+
+/* ------------------------------------------------------------------ 打印版（阶段 6 切片④）
+   「打印版」按钮走 window.print()，无服务端 PDF。规则：
+   - 隐藏侧栏 / 顶栏 / 所有操作按钮（.no-print）—— 打印件只留报告正文；
+   - 补上 .print-only（报告出处与风险提示，屏幕不显示）；
+   - 白底、去阴影、展开分页，表格不被分页切断表头。 */
+.print-only {
+  display: none;
+}
+
+@media print {
+  .app-sider,
+  .app-header,
+  .no-print {
+    display: none !important;
+  }
+
+  .print-only {
+    display: block !important;
+  }
+
+  .ant-layout {
+    background: #fff !important;
+  }
+
+  .ant-layout-content {
+    padding: 0 !important;
+  }
+
+  .ant-card {
+    box-shadow: none !important;
+    break-inside: avoid;
+  }
+
+  .ant-table table {
+    font-size: 12px;
+  }
+}
