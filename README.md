@@ -13,7 +13,7 @@
 | 3 | 打通 Qlib-Server + 最小回测 | ✅ 已交付并实机验收（2026-10-15，A3-1…A3-10 全过）→ `docs/stage3/` |
 | 4 | 项目 / 数据 / 因子 | ✅ 已交付，**247 个测试全绿** + live smoke 29/29 → `docs/stage4/` |
 | 5 | 训练 → 回测 → 可视化 → 任务中心 | ✅ 已交付，**304 个测试全绿** + live smoke 43/43 + 浏览器冒烟 7 页 → `docs/stage5/` |
-| 6 | 审计 / 权限 / 合规 / e2e / README 定稿 | — |
+| 6 | 审计 / 权限 / 合规 / e2e / README 定稿 | ✅ 已交付，**401 个测试全绿** + live smoke 34/34 + Playwright e2e 11/11 → `docs/stage6/` |
 | 7 | 接入 Casdoor + 生产部署文档 | — |
 
 每阶段固定交付：**目标 → 文件树 → 代码 → 启动命令 → 测试方法 → 已知风险 → 验收清单**，你确认后才进入下一阶段。
@@ -93,12 +93,15 @@ QlibQuantLab/
 │   │   ├── container.py  ★ 唯一装配点（唯一 import adapters 的地方）
 │   │   ├── api/ services/ repositories/ models/ core/ schemas/
 │   │   └── worker/       独立任务进程（qlib 只允许在 worker/qlib_env.py + adapters/compute/qlib_compute.py）
-│   ├── alembic/          0001：一次建全 17 张表 + 种子
-│   └── tests/            architecture · unit · contract · api · integration（304 用例 + 1 skip）
-├── frontend/         Next.js 15 + TS + AntD 5 + TanStack Query（pnpm）
+│   ├── alembic/          0001：一次建全 17 张表 + 种子；0004：factor_compute_runs（阶段 6）
+│   └── tests/            architecture · unit · contract · api · integration（401 用例 + 1 skip）
+├── frontend/         Next.js 15 + TS + AntD 5 + TanStack Query（pnpm）+ Playwright e2e
 ├── docs/stage1/      架构设计（9 份，阶段基准）
 ├── docs/stage2/      阶段 2 交付文档
 ├── docs/stage3/      阶段 3 交付文档（Qlib-Server + 最小回测）
+├── docs/stage4/      阶段 4 交付文档（项目 / 数据 / 因子）
+├── docs/stage5/      阶段 5 交付文档（训练 / 回测 / 可视化 / 任务中心）
+├── docs/stage6/      阶段 6 交付文档（合规与可验证性补齐）
 ├── docker-compose.yml       模式 A · 自包含（qlib 链路挂 --profile qlib）
 ├── docker-compose.prod.yml  模式 B · 复用外部依赖 + Traefik
 ├── .env.example · Makefile · scripts/
@@ -124,19 +127,24 @@ QlibQuantLab/
 ## 测试
 
 ```bash
-cd backend && uv run pytest -q        # 304 passed + 1 skipped，<10s，零外部依赖
+cd backend && uv run pytest -q        # 401 passed + 1 skipped，<15s，零外部依赖
 uv run ruff check .                   # All checks passed
 # 真实后端契约（可选，需本地服务；redis 端口按默认 HOST_PORT_REDIS=16379，用外部实例就改成实际值）
 TEST_REDIS_URL=redis://localhost:16379/9 uv run pytest tests/contract -q
 ```
 
-前端：`pnpm lint && pnpm typecheck && pnpm build`（阶段 6 引入 Playwright e2e）。
+前端：`pnpm lint && pnpm typecheck && pnpm build`；e2e：`pnpm e2e`（Playwright 11 用例 / 8 条关键旅程，冒烟对象是在跑的部署栈）。
+
+实机冒烟：`python3 scripts/stage6_smoke.py`（34 项断言，真实 qlib 全链路：因子计算 → csi300 回测 → 复用训练 → 导出/审计留痕；与 e2e 各占 4 次登录限流额度，建议错峰）。
 
 ## 文档
 
 - `docs/stage1/` — 架构、目录、数据模型、API 与认证、端口与适配器、Qlib 集成、部署、风险与路线图
 - `docs/stage2/` — 阶段 2：目标 / 文件树 / 代码 / 启动命令 / 测试方法 / 已知风险 / 验收清单
 - `docs/stage3/` — 阶段 3：Qlib-Server 自建镜像、worker 计算链、部署与 smoke、验收清单
+- `docs/stage4/` — 阶段 4：项目 / 数据（合规台账 + 导入校验）/ 因子库
+- `docs/stage5/` — 阶段 5：因子快照 → 训练 → 双信号回测 → 四标注 → 任务中心
+- `docs/stage6/` — 阶段 6：审计导出、RBAC 扫描、universe、导出/持仓/打印、因子计算/IC、训练复用、合规页、Playwright e2e
 - 阶段 1 风险登记册与七阶段路线图见 `docs/stage1/08-risks-and-roadmap.md`
 
 ## License

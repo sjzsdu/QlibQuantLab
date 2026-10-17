@@ -15,7 +15,7 @@
 | S5-9 | **回测不含持仓明细**（`positions_key` 恒为 None，本阶段只产净值曲线 + 指标） | 详情页无逐日持仓表 | 阶段 6 报告导出时一并补持仓明细 | ⏳ 阶段 6 |
 | S5-10 | **行情缺口按前值计价（forward-fill）**：dev cn_data 在 2019-04-29 整个 A 股横截面为 NaN（指数有值）；旧口径缺口日持仓按 0 计价 → 误触破产底线 → 净值永久归零（阶段 5 实机踩坑，见 05-testing §4-10） | 数据缺口会让回测假破产 | 模拟器缺口日沿用最近有效收盘（`last_close`），回归测试锁死；真破产（cash+持仓 ≤0）底线保留 | ✅ 已修复 |
 | S5-11 | **股票池 = `instruments/all.txt` 全量**：含指数（SH000300/SH000905…）与全部个股，`max_instruments` 仅按 qlib 顺序截断前 N；无 CSI300/中证500 等池选择 | 回测标的里可能混入指数；截断顺序受 all.txt 排序影响 | 数据区间标注回显 `instruments` 数；阶段 6 提供 universe 选择（`instruments/csi300.txt` 等已在数据卷内） | ⏳ 阶段 6 |
-| S5-12 | **镜像重建依赖 Docker Hub 可达性**：阶段 5 实测 `registry-1.docker.io` EOF，`python:3.11-slim` 本地无缓存 → `docker compose build worker` 不可用 | 环境变更（如 libgomp1 入镜像）无法固化 | 已移除 `# syntax=` 前端镜像拉取；libgomp1 已写入 Dockerfile（网络恢复后重建验证）；当日用 `exec apt-get` 热修运行容器先行冒烟 | ⚠️ 运维依赖 |
+| S5-12 | **镜像重建依赖 Docker Hub 可达性**：阶段 5 实测 `registry-1.docker.io` EOF，`python:3.11-slim` 本地无缓存 → `docker compose build worker` 不可用 | 环境变更（如 libgomp1 入镜像）无法固化 | 已移除 `# syntax=` 前端镜像拉取；libgomp1 已写入 Dockerfile；当日用 `exec apt-get` 热修运行容器先行冒烟。**2026-10-17 已固化**：Docker Hub 仍不可达（SSL_ERROR_SYSCALL），改走镜像源按 digest 精确拉取 `docker.1ms.run/library/python@sha256:e529028`（amd64，与 BuildKit 所需 digest 一致）→ 本地 retag `python:3.11-slim` → `docker compose build worker` 成功 → 容器重建，`import lightgbm 4.7.0` OpenMP 链接通过，3 handler 注册 + 消费正常 | ✅ 已固化 |
 
 ## 2. 验收清单（阶段 5）
 

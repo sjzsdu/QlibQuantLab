@@ -31,3 +31,6 @@ pnpm-debug.log*
 coverage/
 playwright-report/
 test-results/
+
+# Playwright 共享登录态（setup 项目产物）
+e2e/.auth/
