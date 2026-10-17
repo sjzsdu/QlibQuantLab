@@ -9,6 +9,7 @@ from qqlab.models.project import Visibility as ProjectVisibility
 from qqlab.models.study import (
     Backtest,
     Factor,
+    FactorComputeRun,
     MLModel,
     Strategy,
     TrainingRun,
@@ -26,6 +27,7 @@ TENANT_MODELS: tuple[type, ...] = (
     DataLicense,
     Dataset,
     Factor,
+    FactorComputeRun,
     MLModel,
     TrainingRun,
     Strategy,
@@ -51,6 +53,7 @@ __all__ = [
     "DataSource",
     "Dataset",
     "Factor",
+    "FactorComputeRun",
     "JSONType",
     "Job",
     "JobKind",

@@ -84,6 +84,9 @@ class BacktestSpec:
     params: dict[str, Any] = field(default_factory=dict)
     start_date: str = ""
     end_date: str = ""
+    #: 股票池名（数据集 instruments/ 下）；"all" = 全市场（含指数代码）。
+    #: 阶段 6 D6：worker 侧按此解析标的清单，非 all 为静态成分快照（见 limitations）。
+    universe: str = "all"
 
 
 @dataclass(slots=True)
@@ -125,6 +128,48 @@ class TrainSpec:
     hyperparams: dict[str, Any] = field(default_factory=dict)
     target: str = DEFAULT_TARGET
     max_instruments: int = 0  # 0 = 不截断（训练默认小 universe 由调用方给）
+    #: 股票池名（数据集 instruments/ 下）；"all" = 全市场（含指数代码）
+    universe: str = "all"
+    #: 训练复用因子值（阶段 6）：非空时由 API 层按因子版本解析好的复用源
+    #: （[{factor_id, version, run_id, values_uri, expression}]），适配器读 values.csv.gz
+    #: 拼 X 而非重算表达式；None/空 = 重算（默认，行为不变）。
+    factor_value_sources: list[dict[str, Any]] | None = None
+
+
+@dataclass(slots=True)
+class FactorComputeSpec:
+    """因子计算输入（阶段 6 切片⑤）：单因子表达式快照 + 数据集 + 区间 + 股票池。
+
+    ``target``：qlib 表达式，IC 参照的预测目标（默认次期收益，见 ``DEFAULT_TARGET``）。
+    """
+
+    org_id: str
+    project_id: str
+    factor_id: str
+    dataset_id: str
+    expression: str
+    version: int = 1
+    start_date: str = ""
+    end_date: str = ""
+    target: str = DEFAULT_TARGET
+    max_instruments: int = 0  # 0 = 不截断
+    #: 股票池名（数据集 instruments/ 下）；"all" = 全市场（含指数代码）
+    universe: str = "all"
+    #: 计算运行记录 id：ic/values 对象键用它隔离（同因子多次计算不互相覆盖）
+    run_id: str = ""
+
+
+@dataclass(slots=True)
+class FactorComputeResult:
+    metrics: dict[str, Any]
+    data_range: dict[str, Any]
+    #: IC 序列 CSV 字节（``date,ic``）——适配器只产字节，落对象存储由 handler 统一做
+    ic_csv: bytes
+    #: 因子值面板 CSV 字节（``date,instrument,value``）
+    values_csv: bytes
+    ic_key: str
+    values_key: str
+    limitations: str
 
 
 @dataclass(slots=True)
@@ -152,6 +197,8 @@ class ComputePort(Protocol):
     async def run_backtest(self, spec: BacktestSpec, progress: ProgressCallback) -> BacktestResult: ...
 
     async def train(self, spec: TrainSpec, progress: ProgressCallback) -> TrainResult: ...
+
+    async def compute_factor(self, spec: FactorComputeSpec, progress: ProgressCallback) -> FactorComputeResult: ...
 
     async def predict_signals(
         self, spec: BacktestSpec, model_artifact: bytes, progress: ProgressCallback

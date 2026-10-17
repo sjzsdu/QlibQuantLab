@@ -26,12 +26,14 @@ from qqlab.schemas import (
     DataLicenseUpdateIn,
     DatasetCreateIn,
     DatasetImportOut,
+    DatasetUniversesOut,
     DataSourceCreateIn,
     DataSourceUpdateIn,
     InstrumentsOut,
     OkOut,
     PreviewOut,
     PreviewRowOut,
+    UniverseOut,
 )
 from qqlab.services import (
     AuditContext,
@@ -278,6 +280,20 @@ async def dataset_instruments(
     service = _dataset_service(request, session, user, ctx)
     items, total, page, page_size = await service.instruments(dataset_id, page=page, page_size=page_size)
     out = InstrumentsOut(dataset_id=dataset_id, items=items, total=total, page=page, page_size=page_size)
+    return success(request, out.model_dump())
+
+
+@router.get("/datasets/{dataset_id}/universes", summary="数据集可用股票池（instruments/*.txt）")
+async def dataset_universes(
+    request: Request,
+    dataset_id: str,
+    user=Depends(require_permission("data.read")),
+    session=Depends(get_db_session),
+    ctx=Depends(get_audit_ctx),
+) -> dict:
+    service = _dataset_service(request, session, user, ctx)
+    items = await service.universes(dataset_id)
+    out = DatasetUniversesOut(dataset_id=dataset_id, items=[UniverseOut(**item) for item in items])
     return success(request, out.model_dump())
 
 

@@ -10,6 +10,9 @@
 
 from __future__ import annotations
 
+import csv
+import io
+import json
 import uuid
 from typing import TYPE_CHECKING, Any
 
@@ -30,14 +33,20 @@ from qqlab.repositories import (
     TrainingRunRepository,
 )
 from qqlab.schemas import BacktestCreateIn, BacktestOut, CurveOut, PageOut
-from qqlab.services.base import AuditContext
+from qqlab.services.base import AuditContext, ensure_universe
 
 if TYPE_CHECKING:  # pragma: no cover - 仅类型
+    from qqlab.config import Settings
     from qqlab.ports.storage import StorageProvider
     from qqlab.services.job_service import JobService
 
 #: 曲线降采样上限（ECharts 单系列足够细腻，且响应体可控）
 CURVE_MAX_POINTS = 1500
+
+#: 导出报告末尾固定风险提示（与前端 RiskBanner 同口径）
+EXPORT_DISCLAIMER = (
+    "风险提示：本平台不提供任何投资建议，不保证任何策略收益，投资风险由用户自行承担；历史回测不代表未来收益。"
+)
 
 
 class BacktestService:
@@ -50,6 +59,7 @@ class BacktestService:
         audit: AuditWriter,
         ctx: AuditContext,
         storage: StorageProvider | None = None,
+        settings: Settings | None = None,
     ) -> None:
         self._session = session
         self._scope = scope
@@ -57,6 +67,7 @@ class BacktestService:
         self._audit = audit
         self._ctx = ctx
         self._storage = storage
+        self._settings = settings
 
     # ------------------------------------------------------------- 序列化
     async def _job_status(self, job_id: uuid.UUID | None) -> str | None:
@@ -91,6 +102,7 @@ class BacktestService:
             data_range=dict(row.data_range or {}),
             limitations=row.limitations,
             curve_uri=row.curve_uri,
+            positions_uri=row.positions_uri,
             start_date=row.start_date,
             end_date=row.end_date,
             created_by=names.get(row.created_by, "（空）"),
@@ -108,6 +120,14 @@ class BacktestService:
             raise NotFoundError("数据集不存在或不属于当前组织")
         if not (dataset.start_date and dataset.end_date):
             raise ValidationAppError("数据集尚无日期范围（导入未完成），不能提交回测")
+
+        # 股票池校验（阶段 6 D6）：非 all 必须存在于数据集 instruments/（fail-closed）
+        ensure_universe(
+            self._settings,
+            org_id=self._scope.org_id,
+            storage_uri=dataset.storage_uri,
+            universe=data.universe,
+        )
 
         config: dict[str, Any] = dict(strategy.signal_config or {})
         if config.get("source") == "model":
@@ -134,7 +154,11 @@ class BacktestService:
             benchmark=data.benchmark,
             # 费用三件套：API 扁平形态原样入库（worker 侧 CostConfig.from_dict 兼容）
             cost_config=data.cost_config.model_dump(),
-            params={"topk": data.topk, "max_instruments": data.max_instruments},
+            params={
+                "topk": data.topk,
+                "max_instruments": data.max_instruments,
+                "universe": data.universe,
+            },
             split_config={
                 "start": start.isoformat() if start else None,
                 "end": end.isoformat() if end else None,
@@ -234,5 +258,88 @@ class BacktestService:
             sampled.append(rows[-1])
         return CurveOut(points=sampled, total=total, downsampled=True)
 
+    # ------------------------------------------------------------- 导出（阶段 6 切片④）
+    async def export_csv(self, backtest_id: str, *, section: str) -> tuple[str, bytes]:
+        """回测导出：返回 ``(下载文件名, CSV 字节)``。审计与二次确认在 API 层。
 
-__all__ = ["BacktestService", "CURVE_MAX_POINTS"]
+        - ``report``：报告 CSV（``section,key,value`` 三列），覆盖四标注口径 ——
+          ``data_range``（含数据来源授权链，逐层展平）+ ``cost_config`` + ``limitations``
+          + 参数/指标/切分，末尾附固定风险提示。UTF-8 BOM 便于 Excel 打开中文。
+          内容与页面展示**同源**（都经 ``_out`` 序列化），避免导出与界面口径漂移。
+        - ``positions``：逐日持仓明细（对象存储 ``positions.csv`` 原样转发，无 BOM）。
+        """
+        row = await BacktestRepository(self._session, self._scope).get(backtest_id)
+        if row is None:
+            raise NotFoundError("回测不存在或不属于当前组织")
+        stamp = row.created_at.strftime("%Y%m%d_%H%M%S")
+
+        if section == "positions":
+            if not row.positions_uri:
+                raise ValidationAppError("该回测尚无持仓明细（任务未完成，或产出早于持仓快照功能上线）")
+            if self._storage is None:  # pragma: no cover - 装配恒有 storage
+                raise ValidationAppError("对象存储未装配")
+            try:
+                payload = await self._storage.get(row.positions_uri)
+            except KeyError as exc:
+                raise ValidationAppError("持仓明细对象缺失（可能已被清理）") from exc
+            return f"backtest_{backtest_id}_positions_{stamp}.csv", payload
+
+        out = await self._out(row)
+        buf = io.StringIO()
+        writer = csv.writer(buf, lineterminator="\n")
+        writer.writerow(["section", "key", "value"])
+
+        def _cell(value: Any) -> str:
+            if value is None:
+                return ""
+            if isinstance(value, bool):
+                return "true" if value else "false"
+            if isinstance(value, dict | list):
+                return json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str)
+            return str(value)
+
+        def _flat(prefix: str, mapping: dict) -> list[tuple[str, Any]]:  # noqa: ANN001
+            pairs: list[tuple[str, Any]] = []
+            for key in sorted(mapping):
+                value = mapping[key]
+                path = f"{prefix}.{key}" if prefix else str(key)
+                if isinstance(value, dict):
+                    pairs.extend(_flat(path, value))
+                else:
+                    pairs.append((path, value))
+            return pairs
+
+        meta_rows = [
+            ("backtest_id", out.id),
+            ("strategy_id", out.strategy_id),
+            ("strategy_name", out.strategy_name),
+            ("dataset_id", out.dataset_id),
+            ("dataset_name", out.dataset_name),
+            ("benchmark", out.benchmark),
+            ("signal_source", (out.data_range or {}).get("signal_source")),
+            ("universe", (out.data_range or {}).get("universe")),
+            ("engine", (out.metrics or {}).get("engine")),
+            ("created_by", out.created_by),
+            ("created_at", out.created_at.isoformat()),
+            ("start_date", out.start_date.isoformat() if out.start_date else None),
+            ("end_date", out.end_date.isoformat() if out.end_date else None),
+            ("job_status", out.job_status),
+        ]
+        for key, value in meta_rows:
+            writer.writerow(["meta", key, _cell(value)])
+        for section_name, mapping in (
+            ("param", out.params or {}),
+            ("metric", out.metrics or {}),
+            ("cost", out.cost_config or {}),
+            ("split", out.split_config or {}),
+            ("data_range", out.data_range or {}),
+        ):
+            for key, value in _flat("", mapping):
+                writer.writerow([section_name, key, _cell(value)])
+        writer.writerow(["disclaimer", "limitations", out.limitations or ""])
+        writer.writerow(["disclaimer", "risk", EXPORT_DISCLAIMER])
+
+        return f"backtest_{backtest_id}_report_{stamp}.csv", b"\xef\xbb\xbf" + buf.getvalue().encode("utf-8")
+
+
+__all__ = ["BacktestService", "CURVE_MAX_POINTS", "EXPORT_DISCLAIMER"]

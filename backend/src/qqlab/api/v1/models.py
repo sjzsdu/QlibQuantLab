@@ -44,6 +44,7 @@ def _service(session, user: CurrentUser, ctx: AuditContext, container: Container
         audit=container.audit,
         ctx=ctx,
         storage=container.storage,
+        settings=container.settings,
     )
 
 

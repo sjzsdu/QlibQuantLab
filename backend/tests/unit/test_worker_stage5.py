@@ -291,9 +291,7 @@ class TestTrainHandler:
         await handler({"job_id": str(first)})
 
         # 重试 = 复制 payload + retry_of（新 job_id、同 training_run_id）
-        retry = await _add_job(
-            container, JobKind.TRAIN, {**_train_payload(refs), "retry_of": str(first)}
-        )
+        retry = await _add_job(container, JobKind.TRAIN, {**_train_payload(refs), "retry_of": str(first)})
         result = await handler({"job_id": str(retry)})
         assert result["engine"] == "stub"
 

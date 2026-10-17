@@ -101,6 +101,57 @@ def read_instruments(data_root: Path) -> list[dict[str, str]]:
     return items
 
 
+# ------------------------------------------------------------------ 股票池（阶段 6）
+#: 股票池文件名白名单（防 ``../`` / 绝对路径注入：不允许任何分隔符）
+#: 股票池名合法形态（API schema 的 ``pattern`` 与文件解析共用，防路径穿越）。
+#: Pydantic ``pattern`` 是 ``re.search`` 语义，schema 侧须用带锚点的全串变体。
+UNIVERSE_NAME_PATTERN = r"[A-Za-z0-9._\-]{1,64}"
+UNIVERSE_NAME_ANCHORED_PATTERN = rf"^{UNIVERSE_NAME_PATTERN}$"
+_UNIVERSE_NAME_RE = re.compile(UNIVERSE_NAME_ANCHORED_PATTERN)
+
+
+def list_universes(data_root: Path) -> list[str]:
+    """数据集可用股票池名（``instruments/*.txt`` 基名，含 ``all``，字典序）。"""
+    inst_dir = data_root / "instruments"
+    if not inst_dir.is_dir():
+        raise DataPathError(f"标的目录不存在：{inst_dir}（先执行 make qlib-data 导入数据）")
+    return sorted(p.stem for p in inst_dir.glob("*.txt") if p.is_file())
+
+
+def read_universe(data_root: Path, name: str) -> list[str]:
+    """读股票池标的列表（去重、保文件序）。
+
+    行格式容错 2 列（``NAME[\\tDISPLAY]``）与 3 列（``NAME\\tSTART\\tEND``，
+    qlib 指数成分文件的标准形态）—— 只取第 1 列。
+
+    **静态成分语义**（阶段 6 D6 决策）：START/END 分段区间**不参与过滤**，
+    同一标的多段区间行去重后保留 —— 成分按文件快照静态处理，非时点化成分；
+    调用方须把该局限写进 data_range / limitations。
+    """
+    if not _UNIVERSE_NAME_RE.fullmatch(name or ""):
+        raise DataPathError(f"非法股票池名：{name!r}")
+    path = (data_root / "instruments" / f"{name}.txt").resolve()
+    instruments_dir = (data_root / "instruments").resolve()
+    if not path.is_relative_to(instruments_dir):  # noqa: UP038 - fail-closed 双保险
+        raise DataPathError(f"股票池路径越界：{name!r}")
+    if not path.exists():
+        available = ", ".join(list_universes(data_root)) or "（无）"
+        raise DataPathError(f"股票池不存在：{name}（可用：{available}）")
+    names: list[str] = []
+    seen: set[str] = set()
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):  # # 开头为注释行（qlib 生态惯例，容错跳过）
+            continue
+        first = line.split("\t", 1)[0].strip()
+        if first and first not in seen:
+            seen.add(first)
+            names.append(first)
+    if not names:
+        raise DataPathError(f"股票池为空：{name}")
+    return names
+
+
 def read_ohlcv(
     data_root: Path,
     instrument: str,
@@ -157,8 +208,12 @@ def read_ohlcv(
 __all__ = [
     "DataPathError",
     "OHLCV_FIELDS",
+    "UNIVERSE_NAME_ANCHORED_PATTERN",
+    "UNIVERSE_NAME_PATTERN",
     "PreviewRow",
+    "list_universes",
     "read_calendar",
     "read_instruments",
     "read_ohlcv",
+    "read_universe",
 ]

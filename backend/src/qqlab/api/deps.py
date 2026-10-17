@@ -112,6 +112,9 @@ def require_permission(permission: str) -> Callable[..., Awaitable[CurrentUser]]
             raise ForbiddenError(f"权限不足：需要 {permission}")
         return user
 
+    # 供架构测试静态扫描（D6-2）：遍历 app.routes 时读取该标记，
+    # 断言「非白名单路由必须挂权限点且该点 ∈ PERMISSIONS」。
+    _guard.__qqlab_permission__ = permission  # type: ignore[attr-defined]
     return _guard
 
 
@@ -125,6 +128,8 @@ def require_roles(*roles: Role) -> Callable[..., Awaitable[CurrentUser]]:
             raise ForbiddenError("权限不足：角色不匹配")
         return user
 
+    # 角色级守卫的扫描标记（无权限点语义，测试按「已守卫」计）。
+    _guard.__qqlab_roles__ = tuple(sorted(r.value for r in allowed))  # type: ignore[attr-defined]
     return _guard
 
 

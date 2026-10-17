@@ -29,6 +29,8 @@ from qqlab.models import (
     DataLicense,
     Dataset,
     DataSource,
+    Factor,
+    FactorComputeRun,
     Job,
     JobKind,
     JobStatus,
@@ -38,9 +40,13 @@ from qqlab.models import (
     Strategy,
     User,
 )
-from qqlab.ports.compute import CostConfig
+from qqlab.ports.compute import DEFAULT_TARGET, CostConfig
 from qqlab.repositories.job import JobRepository
-from qqlab.worker.handlers import make_backtest_handler, make_dataset_import_handler
+from qqlab.worker.handlers import (
+    make_backtest_handler,
+    make_dataset_import_handler,
+    make_factor_compute_handler,
+)
 
 ORG = "dev-org"
 ORG_UUID = stable_uuid(ORG)
@@ -444,3 +450,124 @@ class TestBacktestHandler:
 
         assert first["engine"] == "stub"
         assert second == {"skipped": True, "reason": "job 状态不是 queued（当前 succeeded）"}
+
+
+class TestFactorComputeHandler:
+    """因子计算 handler（阶段 6 切片⑤）：stub 计算 → 四标注回写 + 对象落存储。"""
+
+    async def _seed_rows(self, container) -> tuple[uuid.UUID, uuid.UUID]:
+        await _seed_identity(container)
+        async with container.database.session() as session:
+            source = DataSource(
+                org_id=ORG_UUID, created_by=USER_UUID, name="fc-source", kind="yahoo_official"
+            )
+            session.add(source)
+            await session.flush()
+            license_row = DataLicense(
+                org_id=ORG_UUID,
+                created_by=USER_UUID,
+                data_source_id=source.id,
+                license_ref="seed",
+                scope="internal_research",
+            )
+            session.add(license_row)
+            await session.flush()
+            dataset = Dataset(
+                org_id=ORG_UUID,
+                created_by=USER_UUID,
+                data_source_id=source.id,
+                license_id=license_row.id,
+                name="fc-dataset",
+                qlib_region="cn",
+                freq="day",
+            )
+            session.add(dataset)
+            await session.flush()
+            project = Project(
+                org_id=ORG_UUID, created_by=USER_UUID, name=f"S6 因子项目-{uuid.uuid4().hex[:8]}"
+            )
+            session.add(project)
+            await session.flush()
+            factor = Factor(
+                org_id=ORG_UUID,
+                created_by=USER_UUID,
+                project_id=project.id,
+                name="fc-factor",
+                expression="$close / Ref($close, 5) - 1",
+                factor_type="expression",
+            )
+            session.add(factor)
+            await session.flush()
+            run = FactorComputeRun(
+                org_id=ORG_UUID,
+                created_by=USER_UUID,
+                project_id=project.id,
+                factor_id=factor.id,
+                dataset_id=dataset.id,
+                metrics={},
+                data_range={},
+            )
+            session.add(run)
+            await session.flush()
+            return run.id, factor.id
+
+    async def test_compute_runs_and_writes_annotations(self, settings, container) -> None:
+        run_id, factor_id = await self._seed_rows(container)
+        payload = {
+            "run_id": str(run_id),
+            "factor_id": str(factor_id),
+            "expression": "$close / Ref($close, 5) - 1",
+            "version": 1,
+            "start_date": "2023-01-03",
+            "end_date": "2023-12-29",
+            "universe": "all",
+            "max_instruments": 0,
+            "target": DEFAULT_TARGET,
+        }
+        compute = StubComputeProvider(container.storage)
+        handler = make_factor_compute_handler(settings, container, compute)
+        job_id = await _add_job(container, JobKind.FACTOR_COMPUTE, payload)
+        result = await handler({"job_id": str(job_id)})
+
+        assert result["engine"] == "stub"
+        assert result["coverage"] > 0
+
+        from sqlalchemy import select
+
+        async with container.database.session() as session:
+            run = (
+                (await session.execute(select(FactorComputeRun).where(FactorComputeRun.id == run_id)))
+                .scalars()
+                .first()
+            )
+            assert run is not None
+            assert run.ic_uri and run.ic_uri.endswith("stub_ic.csv")
+            assert run.values_uri and run.values_uri.endswith("stub_values.csv.gz")
+            assert run.finished_at is not None
+            assert run.metrics["engine"] == "stub"
+            # 四标注：区间 + 引擎 + 表达式快照 + 股票池 + 来源授权 + 局限
+            data_range = run.data_range
+            assert data_range["start"] <= data_range["end"]
+            assert data_range["expression"] == "$close / Ref($close, 5) - 1"
+            assert data_range["universe"] == "all"
+            assert data_range["source"] is not None
+            assert data_range["limitations"]
+            job = (await session.execute(select(Job).where(Job.id == job_id))).scalars().first()
+            assert job is not None
+            assert job.status == JobStatus.SUCCEEDED
+            assert job.progress == 100
+
+        # 对象真的在对象存储里
+        assert await container.storage.get(result["ic_key"])
+        assert await container.storage.get(result["values_key"])
+
+    async def test_missing_run_id_fails_job(self, settings, container) -> None:
+        compute = StubComputeProvider(container.storage)
+        handler = make_factor_compute_handler(settings, container, compute)
+        job_id = await _add_job(container, JobKind.FACTOR_COMPUTE, {})
+
+        with pytest.raises(Exception, match="缺少 run_id"):
+            await handler({"job_id": str(job_id)})
+
+        job = await _get_job(container, job_id)
+        assert job is not None and job.status == JobStatus.FAILED

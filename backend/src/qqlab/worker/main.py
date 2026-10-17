@@ -22,6 +22,7 @@ from qqlab.ports.message_queue import JOB_QUEUE, Message
 from qqlab.worker.handlers import (
     make_backtest_handler,
     make_dataset_import_handler,
+    make_factor_compute_handler,
     make_train_handler,
 )
 
@@ -111,6 +112,7 @@ def build_worker(settings: Settings | None = None) -> Worker:
     worker.register(JobKind.DATASET_IMPORT, make_dataset_import_handler(settings, container))
     worker.register(JobKind.BACKTEST, make_backtest_handler(settings, container, compute))
     worker.register(JobKind.TRAIN, make_train_handler(settings, container, compute))
+    worker.register(JobKind.FACTOR_COMPUTE, make_factor_compute_handler(settings, container, compute))
     return worker
 
 

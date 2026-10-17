@@ -7,6 +7,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 
+from qqlab.core.qlib_data import UNIVERSE_NAME_ANCHORED_PATTERN
+
 
 # ------------------------------------------------------------------ 因子（阶段 4）
 class FactorCreateIn(BaseModel):
@@ -50,6 +52,45 @@ class ExpressionCheckOut(BaseModel):
     errors: list[str] = Field(default_factory=list)
     fields: list[str] = Field(default_factory=list)
     functions: list[str] = Field(default_factory=list)
+
+
+# ---------------------------------------------------- 因子计算（阶段 6 切片⑤）
+class FactorComputeSubmitIn(BaseModel):
+    dataset_id: str
+    #: 缺省用数据集起点/终点（与训练同一夹紧校验口径）
+    start_date: date | None = None
+    end_date: date | None = None
+    #: 股票池（数据集 instruments/ 下的池名）；"all" = 全市场（含指数代码）
+    universe: str = Field(default="all", pattern=UNIVERSE_NAME_ANCHORED_PATTERN, max_length=64)
+    #: 标的截断（0 = 全量）；小样本冒烟/预览用
+    max_instruments: int = Field(default=0, ge=0, le=20000)
+
+
+class FactorComputeRunOut(BaseModel):
+    id: str
+    factor_id: str
+    project_id: str
+    dataset_id: str
+    dataset_name: str | None = None
+    job_id: str | None = None
+    job_status: str | None = None
+    #: 覆盖率 + IC 汇总（coverage / ic_mean / ic_std / ic_ir / ic_positive_ratio / n_days）
+    metrics: dict = Field(default_factory=dict)
+    #: 四标注（与训练/回测同口径）：区间 + 引擎 + 表达式 + 股票池 + source + limitations
+    data_range: dict = Field(default_factory=dict)
+    ic_uri: str | None = None
+    values_uri: str | None = None
+    created_at: datetime
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+
+
+class IcCurveOut(BaseModel):
+    """日度 rank-IC 序列（≤1500 点降采样，与净值曲线同口径）。"""
+
+    points: list[list]  # [date, ic]
+    total: int
+    downsampled: bool = False
 
 
 # ------------------------------------------------------------ 模型 / 训练（阶段 5）
@@ -145,6 +186,12 @@ class TrainSubmitIn(BaseModel):
     split: SplitIn | None = None
     #: 训练标的截断（0 = 全量）；小样本冒烟/调参用
     max_instruments: int = Field(default=0, ge=0, le=20000)
+    #: 股票池（数据集 instruments/ 下的池名）；"all" = 全市场（含指数代码）
+    universe: str = Field(default="all", pattern=UNIVERSE_NAME_ANCHORED_PATTERN, max_length=64)
+    #: 复用因子计算落库的因子值（values.csv.gz）而非训练时重算表达式（阶段 6）。
+    #: 显式 opt-in：默认 False（重算，行为不变）；True 时每个因子必须存在同版本的
+    #: 已完成计算记录，否则 422（不静默回退）。
+    reuse_factor_values: bool = False
 
 
 class TrainingRunOut(BaseModel):
@@ -237,6 +284,8 @@ class BacktestCreateIn(BaseModel):
     end_date: date | None = None
     topk: int = Field(default=50, ge=1, le=500)
     max_instruments: int = Field(default=0, ge=0, le=10000)
+    #: 股票池（数据集 instruments/ 下的池名）；"all" = 全市场（含指数代码）
+    universe: str = Field(default="all", pattern=UNIVERSE_NAME_ANCHORED_PATTERN, max_length=64)
     cost_config: CostConfigIn
 
     @model_validator(mode="after")
@@ -265,6 +314,8 @@ class BacktestOut(BaseModel):
     data_range: dict = Field(default_factory=dict)
     limitations: str | None = None
     curve_uri: str | None = None
+    #: 持仓明细对象键（阶段 6 切片④）：非空时前端可导出 positions.csv
+    positions_uri: str | None = None
     start_date: date | None = None
     end_date: date | None = None
     created_by: str = "（空）"

@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from qqlab.core.ids import stable_uuid
@@ -55,6 +56,35 @@ class AuditRepository:
             .order_by(AuditLog.action)
         )
         return list(rows.scalars().all())
+
+    async def page_for_export(
+        self,
+        *,
+        after: tuple[datetime, str] | None,
+        batch: int,
+        action: str | None = None,
+        actor: str | None = None,
+        outcome: str | None = None,
+    ) -> list[AuditLog]:
+        """导出用键集分页（created_at, id）升序 —— 避免 offset 在导出期间漂移。"""
+        stmt = select(AuditLog).where(AuditLog.org_id == self._org_id)
+        if action:
+            stmt = stmt.where(AuditLog.action == action)
+        if actor:
+            stmt = stmt.where(AuditLog.actor_username == actor)
+        if outcome:
+            stmt = stmt.where(AuditLog.outcome == outcome)
+        if after is not None:
+            after_created, after_id = after
+            after_id_uuid = after_id if isinstance(after_id, uuid.UUID) else stable_uuid(str(after_id))
+            stmt = stmt.where(
+                or_(
+                    AuditLog.created_at > after_created,
+                    and_(AuditLog.created_at == after_created, AuditLog.id > after_id_uuid),
+                )
+            )
+        stmt = stmt.order_by(AuditLog.created_at, AuditLog.id).limit(batch)
+        return list((await self.session.execute(stmt)).scalars().all())
 
 
 class SystemConfigRepository:

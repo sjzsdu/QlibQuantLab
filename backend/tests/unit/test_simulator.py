@@ -279,20 +279,85 @@ class TestRunSimulation:
             # 前三个标的在缺口日整行缺失（模拟整横截面 NaN）；GAP003 代表"指数"全程在场，
             # 提供缺口日 → 交易日历仍包含 gap。
             prices[instrument] = [
-                Bar(date=d, open=10.0, close=10.0, volume=1e6)
-                for d in dates
-                if d != gap or i == 3
+                Bar(date=d, open=10.0, close=10.0, volume=1e6) for d in dates if d != gap or i == 3
             ]
         # 手工信号：每天都选前三个（恰好是缺口日缺行情的三个）
-        signals = {
-            d: [(f"GAP{i:03d}.XSHE", 1.0 - i * 0.1) for i in range(4)] for d in dates
-        }
-        sim = run_simulation(
-            prices=prices, signals=signals, cost=zero_cost, topk=3, initial_cash=100_000
-        )
+        signals = {d: [(f"GAP{i:03d}.XSHE", 1.0 - i * 0.1) for i in range(4)] for d in dates}
+        sim = run_simulation(prices=prices, signals=signals, cost=zero_cost, topk=3, initial_cash=100_000)
         navs = dict(sim.nav_curve)
 
         assert gap in navs  # 缺口日仍在交易日历中（由在场标的提供）
         assert math.isclose(navs[gap], 100_000.0, rel_tol=1e-6)  # 前值计价，净值不塌方
         assert all(nav > 90_000.0 for _, nav in sim.nav_curve)  # 全程无假破产
         assert sim.metrics["total_return"] == pytest.approx(0.0, abs=1e-9)
+
+
+class TestPositionsHistory:
+    """阶段 6 切片④：每日持仓快照（positions.csv 的数据源）。"""
+
+    def test_snapshot_per_trading_day_after_mark_to_market(self):
+        """每个交易日一条快照，与 nav_curve 同长同序，且反映收盘后真实持仓。"""
+        prices = _flat_market()
+        dates = [b.date for b in prices["FLAT000.XSHE"]]
+        signals = {date: [(f"FLAT{i:03d}.XSHE", 1.0) for i in range(4)] for date in dates}
+        cost = CostConfig(
+            commission_rate=0.0,
+            min_commission=0.0,
+            slippage_value=0.0,
+            impact_rate_per_million=0.0,
+            settlement_fee_rate=0.0,
+            stamp_duty_sell=0.0,
+        )
+        sim = run_simulation(prices=prices, signals=signals, cost=cost, topk=4, initial_cash=100_000)
+
+        assert len(sim.positions_history) == len(sim.nav_curve)
+        assert [d for d, _ in sim.positions_history] == [d for d, _ in sim.nav_curve]
+        # 首日尚无成交（次日开盘成交）→ 空仓；其后建仓完成 → 4 只等权
+        first_day, first_snap = sim.positions_history[0]
+        assert first_snap == {}
+        later_day, later_snap = sim.positions_history[-1]
+        assert later_day == dates[-1]
+        assert len(later_snap) == 4
+        assert all(shares > 0 for shares in later_snap.values())
+
+    def test_snapshot_is_sorted_and_nonzero_only(self):
+        """快照按标的升序、只记非零持仓（与 final_positions 口径一致）。"""
+        prices = _linear_market()
+        signals = momentum_scores(prices, lookback=5)
+        cost = CostConfig(
+            commission_rate=0.0,
+            min_commission=0.0,
+            slippage_value=0.0,
+            impact_rate_per_million=0.0,
+            settlement_fee_rate=0.0,
+            stamp_duty_sell=0.0,
+        )
+        sim = run_simulation(prices=prices, signals=signals, cost=cost, topk=3, initial_cash=100_000)
+        assert sim.positions_history
+        for _, snap in sim.positions_history:
+            keys = list(snap)
+            assert keys == sorted(keys)
+            assert all(abs(s) > 1e-9 for s in snap.values())
+        # 末日快照与 final_positions 同口径
+        assert sim.positions_history[-1][1] == sim.final_positions
+
+    def test_positions_csv_header_and_rows(self):
+        """CSV 序列化：表头固定，行按 (date, instrument)，shares 保留 6 位小数。"""
+        from qqlab.adapters.compute.simulator import positions_csv
+
+        text = positions_csv(
+            [
+                ("2024-01-02", {"SH600000": 100.5, "SZ000001": 0.1234567}),
+                ("2024-01-03", {}),
+            ]
+        )
+        lines = text.split("\n")
+        assert lines[0] == "date,instrument,shares"
+        assert lines[1] == "2024-01-02,SH600000,100.500000"
+        assert lines[2] == "2024-01-02,SZ000001,0.123457"
+        assert len(lines) == 3  # 空仓日不产出行
+
+    def test_positions_csv_empty_history_has_header(self):
+        from qqlab.adapters.compute.simulator import positions_csv
+
+        assert positions_csv([]) == "date,instrument,shares"

@@ -54,6 +54,11 @@ class AuditAction:
     ADMIN_CONFIG_UPDATE = "admin.config.update"
     ADMIN_MEMBER_ROLE_CHANGE = "admin.member.role_change"
 
+    #: 审计日志自身导出（阶段 6，导出动作也留痕）
+    AUDIT_EXPORT = "audit.export"
+    #: 因子计算（阶段 6）
+    FACTOR_COMPUTE = "factor.compute"
+
     EXPORT_REQUEST = "export.request"
 
 

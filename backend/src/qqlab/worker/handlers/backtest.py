@@ -33,6 +33,20 @@ if TYPE_CHECKING:  # pragma: no cover - 仅类型
 
 logger = get_logger("qqlab.worker.backtest")
 
+#: 非 all 股票池时追加的局限说明（stub 引擎合成行情不按股票池过滤，如实标注）
+_UNIVERSE_LIMITATION = "股票池 {name} 为静态成分快照（START/END 分段区间不参与时点过滤，非时点化成分）"
+
+
+def _with_universe_limitation(limitations: str, universe: str, engine: str = "") -> str:
+    """把股票池局限并进 limitations（阶段 6 D6：非 all 时必须显式声明）。"""
+    if universe in ("", "all"):
+        return limitations
+    if engine == "stub":
+        note = f"股票池 {universe} 仅作标注：stub 合成行情不按股票池过滤标的"
+    else:
+        note = _UNIVERSE_LIMITATION.format(name=universe)
+    return f"{limitations} {note}" if limitations else note
+
 
 async def _source_annotation(session, scope, dataset: Dataset | None) -> dict[str, Any]:  # noqa: ANN001
     """数据来源/授权四标注第 4 项：数据集 → 数据源 → 授权台账（同租户过滤）。"""
@@ -141,6 +155,7 @@ async def _execute(
         params=params,
         start_date=start.isoformat() if start else "",
         end_date=end.isoformat() if end else "",
+        universe=str(params.get("universe") or "all"),
     )
 
     training_run_id: str | None = None
@@ -164,6 +179,7 @@ async def _execute(
     data_range = dict(result.data_range)
     data_range["source"] = await _source_annotation(session, scope, dataset)
     data_range["topk"] = spec.topk
+    data_range["universe"] = spec.universe
     if training_run_id:
         data_range["training_run_id"] = training_run_id
         data_range["model_id"] = str(strategy.model_id)
@@ -172,8 +188,11 @@ async def _execute(
         backtest_id,
         metrics=result.metrics,
         data_range=data_range,
-        limitations=result.limitations,
+        limitations=_with_universe_limitation(
+            result.limitations, spec.universe, engine=str(result.metrics.get("engine") or "")
+        ),
         curve_uri=result.curve_key,
+        positions_uri=result.positions_key,
         job_id=job.id,
     )
     await repo.append_log(

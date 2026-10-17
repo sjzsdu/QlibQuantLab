@@ -29,9 +29,11 @@ from qqlab.core.ids import stable_uuid
 from qqlab.core.qlib_data import (
     DataPathError,
     PreviewRow,
+    list_universes,
     read_calendar,
     read_instruments,
     read_ohlcv,
+    read_universe,
 )
 from qqlab.core.tenant import OrgScope
 from qqlab.models import DataLicense, Dataset, DataSource
@@ -492,6 +494,25 @@ class DatasetService(_BaseDataService):
         total = len(items)
         offset, limit = (page - 1) * page_size, page_size
         return items[offset : offset + limit], total, page, page_size
+
+    async def universes(self, dataset_id: str) -> list[dict[str, object]]:
+        """可用股票池清单（阶段 6 D6）：``instruments/*.txt`` 池名 + 标的数。"""
+        row = await DatasetRepository(self._session, self._scope).get(dataset_id)
+        if row is None:
+            raise NotFoundError("数据集不存在或不属于当前组织")
+        root = self._data_root(row)
+        try:
+            names = list_universes(root)
+        except DataPathError as exc:
+            raise ValidationAppError(str(exc)) from exc
+        items: list[dict[str, object]] = []
+        for name in names:
+            try:
+                count = len(read_universe(root, name))
+            except DataPathError:  # 空文件/坏行池：列入但计 0（提交期会再校验）
+                count = 0
+            items.append({"name": name, "instruments": count})
+        return items
 
     async def calendar(
         self, dataset_id: str, *, start: str | None, end: str | None

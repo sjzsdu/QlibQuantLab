@@ -147,6 +147,16 @@ class CalendarOut(BaseModel):
     end: str | None = None
 
 
+class UniverseOut(BaseModel):
+    name: str
+    instruments: int
+
+
+class DatasetUniversesOut(BaseModel):
+    dataset_id: str
+    items: list[UniverseOut]
+
+
 __all__ = [
     "CalendarOut",
     "DataLicenseCreateIn",

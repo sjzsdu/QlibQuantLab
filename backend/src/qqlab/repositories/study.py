@@ -7,7 +7,7 @@ import uuid
 from sqlalchemy import func, or_, select
 
 from qqlab.core.ids import stable_uuid
-from qqlab.models import MLModel, Strategy, TrainingRun
+from qqlab.models import FactorComputeRun, MLModel, Strategy, TrainingRun
 from qqlab.repositories.base import BaseRepository
 
 
@@ -181,4 +181,68 @@ class StrategyRepository(BaseRepository):
         return strategy
 
 
-__all__ = ["ModelRepository", "StrategyRepository", "TrainingRunRepository"]
+class FactorComputeRunRepository(BaseRepository):
+    """因子计算运行记录（阶段 6 切片⑤）。"""
+
+    def _base(self):  # noqa: ANN202
+        return select(FactorComputeRun).where(FactorComputeRun.org_id == stable_uuid(self.scope.org_id))
+
+    async def get(self, run_id: str | uuid.UUID) -> FactorComputeRun | None:
+        try:
+            rid = uuid.UUID(str(run_id))
+        except ValueError:
+            return None
+        return (await self.session.execute(self._base().where(FactorComputeRun.id == rid))).scalars().first()
+
+    async def list_by_factor(
+        self, *, factor_id: str | uuid.UUID, page: int = 1, page_size: int = 20
+    ) -> tuple[list[FactorComputeRun], int]:
+        offset, limit = self.page_offsets(page, page_size)
+        stmt = self._base().where(FactorComputeRun.factor_id == stable_uuid(str(factor_id)))
+        total = int(
+            (await self.session.execute(select(func.count()).select_from(stmt.subquery()))).scalar_one()
+        )
+        rows = (
+            (
+                await self.session.execute(
+                    stmt.order_by(FactorComputeRun.created_at.desc()).offset(offset).limit(limit)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        return list(rows), total
+
+    async def latest_succeeded(self, factor_id: str | uuid.UUID) -> FactorComputeRun | None:
+        stmt = (
+            self._base()
+            .where(
+                FactorComputeRun.factor_id == stable_uuid(str(factor_id)),
+                FactorComputeRun.finished_at.is_not(None),
+                FactorComputeRun.ic_uri.is_not(None),
+            )
+            .order_by(FactorComputeRun.created_at.desc())
+        )
+        return (await self.session.execute(stmt)).scalars().first()
+
+    async def succeeded_for(self, factor_id: str | uuid.UUID, *, limit: int = 20) -> list[FactorComputeRun]:
+        """已完成且有因子值对象的运行记录（新→旧）。供训练复用按 ``data_range.version`` 选版本。"""
+        stmt = (
+            self._base()
+            .where(
+                FactorComputeRun.factor_id == stable_uuid(str(factor_id)),
+                FactorComputeRun.finished_at.is_not(None),
+                FactorComputeRun.values_uri.is_not(None),
+            )
+            .order_by(FactorComputeRun.created_at.desc())
+            .limit(limit)
+        )
+        return list((await self.session.execute(stmt)).scalars().all())
+
+    async def add(self, run: FactorComputeRun) -> FactorComputeRun:
+        self.session.add(run)
+        await self.session.flush()
+        return run
+
+
+__all__ = ["FactorComputeRunRepository", "ModelRepository", "StrategyRepository", "TrainingRunRepository"]

@@ -31,6 +31,7 @@ from qqlab.ports.auth import CurrentUser
 from qqlab.ports.compute import DEFAULT_TARGET
 from qqlab.repositories import (
     DatasetRepository,
+    FactorComputeRunRepository,
     FactorRepository,
     JobRepository,
     ModelRepository,
@@ -47,9 +48,10 @@ from qqlab.schemas import (
     TrainingRunOut,
     TrainSubmitIn,
 )
-from qqlab.services.base import AuditContext
+from qqlab.services.base import AuditContext, ensure_universe
 
 if TYPE_CHECKING:  # pragma: no cover - 仅类型
+    from qqlab.config import Settings
     from qqlab.ports.storage import StorageProvider
     from qqlab.services.job_service import JobService
 
@@ -84,6 +86,7 @@ class ModelService:
         audit: AuditWriter,
         ctx: AuditContext,
         storage: StorageProvider | None = None,
+        settings: Settings | None = None,
     ) -> None:
         self._session = session
         self._scope = scope
@@ -91,6 +94,7 @@ class ModelService:
         self._audit = audit
         self._ctx = ctx
         self._storage = storage
+        self._settings = settings
 
     # ------------------------------------------------------------- 序列化
     async def _job_status(self, job_id: uuid.UUID | None) -> str | None:
@@ -318,6 +322,13 @@ class ModelService:
         if not (dataset.start_date and dataset.end_date):
             raise ValidationAppError("数据集尚无日期范围（导入未完成），不能提交训练")
 
+        # 股票池校验（阶段 6 D6）：非 all 必须存在于数据集 instruments/（fail-closed）
+        ensure_universe(
+            self._settings,
+            org_id=self._scope.org_id,
+            storage_uri=dataset.storage_uri,
+            universe=data.universe,
+        )
         # 切分：显式优先，缺省按数据集区间 70/30；并夹紧到数据集范围内校验
         if data.split is not None:
             split = {
@@ -340,6 +351,42 @@ class ModelService:
         for active in await JobRepository(self._session, self._scope).active_by_kind(kind="train"):
             if (active.payload or {}).get("model_id") == str(model.id):
                 raise ConflictError("该模型已有排队/运行中的训练任务，请等待其完成")
+
+        # 训练复用因子值（阶段 6，显式 opt-in）：每个因子必须有**同版本**的已完成
+        # 计算记录（含 values.csv.gz），否则 422 —— 不静默回退重算（复用是可复现性承诺）
+        factor_value_sources: list[dict[str, Any]] = []
+        if data.reuse_factor_values:
+            runs_repo = FactorComputeRunRepository(self._session, self._scope)
+            for factor in list(model.factor_snapshot or []):
+                factor_id = str(factor.get("factor_id") or "")
+                version = factor.get("version")
+                if not factor_id:
+                    raise ValidationAppError(
+                        "模型因子快照缺少 factor_id（旧快照），无法复用因子值——"
+                        "请重新保存模型因子，或改用重算（默认）"
+                    )
+                match = next(
+                    (
+                        run
+                        for run in await runs_repo.succeeded_for(factor_id)
+                        if (dict(run.data_range) or {}).get("version") == version
+                    ),
+                    None,
+                )
+                if match is None:
+                    raise ValidationAppError(
+                        f"因子 {factor.get('name') or factor_id}（v{version}）无同版本的已完成计算记录"
+                        "（含因子值对象），无法复用——请先在因子页「计算 IC」，或改用重算（默认）"
+                    )
+                factor_value_sources.append(
+                    {
+                        "factor_id": factor_id,
+                        "version": version,
+                        "run_id": str(match.id),
+                        "values_uri": str(match.values_uri),
+                        "expression": str(factor.get("expression") or ""),
+                    }
+                )
 
         target = str((dict(model.training_config) or {}).get("target") or DEFAULT_TARGET)
         run = TrainingRun(
@@ -369,6 +416,10 @@ class ModelService:
             "factors": list(model.factor_snapshot or []),
             "split": split,
             "max_instruments": int(data.max_instruments),
+            "universe": data.universe,
+            "reuse_factor_values": bool(data.reuse_factor_values),
+            # 复用源（run_id + values_uri 快照）：入队后计算记录被删也不影响本 job 解释
+            "factor_value_sources": factor_value_sources,
         }
         try:
             job_id = await job_service.enqueue(
@@ -399,6 +450,7 @@ class ModelService:
                 "algo": model.algo,
                 "split": split,
                 "n_factors": len(payload["factors"]),
+                "reuse_factor_values": bool(data.reuse_factor_values),
             },
             user=self._user,
             request_id=self._ctx.request_id,

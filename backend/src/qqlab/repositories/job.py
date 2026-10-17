@@ -249,6 +249,7 @@ class BacktestRepository(BaseRepository):
         data_range: dict,
         limitations: str,
         curve_uri: str | None,
+        positions_uri: str | None = None,
         job_id: str | uuid.UUID | None = None,
     ) -> None:
         bt = await self.get(backtest_id)
@@ -258,6 +259,8 @@ class BacktestRepository(BaseRepository):
         bt.data_range = data_range
         bt.limitations = limitations
         bt.curve_uri = curve_uri or bt.curve_uri
+        if positions_uri is not None:
+            bt.positions_uri = positions_uri
         if job_id is not None:
             bt.job_id = uuid.UUID(str(job_id))
         await self.session.flush()

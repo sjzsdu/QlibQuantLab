@@ -38,6 +38,39 @@ class Factor(UUIDPk, TimestampMixin, TenantMixin, Base):
     visibility: Mapped[str] = mapped_column(String(16), nullable=False, default=Visibility.PRIVATE)
 
 
+class FactorComputeRun(UUIDPk, TimestampMixin, TenantMixin, Base):
+    """因子计算运行记录（阶段 6 切片⑤）。
+
+    一次计算 = 一次 job（``JobKind.FACTOR_COMPUTE``）。因子表达式在提交时
+    **快照进 job payload**（含 version），行上只存结果口径：
+    - ``metrics``：coverage / ic_mean / ic_std / ic_ir / ic_positive_ratio / n_days…；
+    - ``data_range``：区间 + 引擎 + 表达式 + 股票池 + 数据来源授权（``source``）
+      + 局限（``limitations``）—— 与训练/回测同一「四标注」口径；
+    - ``ic_uri`` / ``values_uri``：对象存储 CSV（IC 序列 / 因子值面板）。
+    """
+
+    __tablename__ = "factor_compute_runs"
+
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    factor_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("factors.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    job_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("jobs.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    dataset_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("datasets.id", ondelete="RESTRICT"), nullable=False
+    )
+    metrics: Mapped[dict] = mapped_column(JSONType, nullable=False, default=dict)
+    data_range: Mapped[dict] = mapped_column(JSONType, nullable=False, default=dict)
+    ic_uri: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    values_uri: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class MLModel(UUIDPk, TimestampMixin, TenantMixin, Base):
     """模型定义（算法 + 超参 + 数据集 + 因子集合快照）。表名 ``models``。"""
 
@@ -138,4 +171,12 @@ class Backtest(UUIDPk, TimestampMixin, TenantMixin, Base):
     end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
 
 
-__all__ = ["Backtest", "Factor", "MLModel", "Strategy", "TrainingRun", "Visibility"]
+__all__ = [
+    "Backtest",
+    "Factor",
+    "FactorComputeRun",
+    "MLModel",
+    "Strategy",
+    "TrainingRun",
+    "Visibility",
+]

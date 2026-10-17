@@ -42,6 +42,10 @@ class SimulationResult:
     cost_breakdown: dict[str, float] = field(default_factory=dict)
     trade_count: int = 0
     turnover_history: list[float] = field(default_factory=list)
+    #: 每日收盘持仓快照 ``(date, {instrument: shares})``（只记非零持仓，升序）。
+    #: 阶段 6 切片④：用于 ``positions.csv`` 导出 —— 持仓明细逐日可追溯，
+    #: 不只末日 ``final_positions`` 一个截面。
+    positions_history: list[tuple[str, dict[str, float]]] = field(default_factory=list)
 
 
 def momentum_scores(prices: PriceSeries, *, lookback: int = 20) -> SignalMap:
@@ -138,6 +142,7 @@ def run_simulation(
 
     nav_curve: list[tuple[str, float]] = []
     turnover_history: list[float] = []
+    positions_history: list[tuple[str, dict[str, float]]] = []
     trade_count = 0
     fees_total = {"commission": 0.0, "stamp_duty": 0.0, "settlement": 0.0, "impact": 0.0}
     slippage_total = 0.0
@@ -234,6 +239,8 @@ def run_simulation(
             holdings.clear()
             nav = 0.0
         nav_curve.append((date, nav))
+        # ---- 2.5) 记录当日收盘持仓（破产清仓后即真实状态：空仓/零现金） ----
+        positions_history.append((date, {inst: s for inst, s in sorted(holdings.items()) if abs(s) > 1e-9}))
 
         # ---- 3) 收盘生成次日目标市值（t 日信号 → t+1 日开盘成交） ----
         day_signals = signals.get(date)
@@ -270,7 +277,20 @@ def run_simulation(
         cost_breakdown={**fees_total, "slippage": slippage_total},
         trade_count=trade_count,
         turnover_history=turnover_history,
+        positions_history=positions_history,
     )
+
+
+def positions_csv(history: list[tuple[str, dict[str, float]]]) -> str:
+    """持仓快照 → CSV 文本（``date,instrument,shares``，含表头，UTF-8 无 BOM）。
+
+    空快照也返回表头 —— 导出端拿到空表可明确表达「该回测无成交/无持仓」。
+    """
+    lines = ["date,instrument,shares"]
+    for date, snapshot in history:
+        for instrument, shares in snapshot.items():
+            lines.append(f"{date},{instrument},{shares:.6f}")
+    return "\n".join(lines)
 
 
 def _metrics(nav_curve: list[tuple[str, float]], initial_cash: float) -> dict[str, float]:
@@ -311,4 +331,12 @@ def _metrics(nav_curve: list[tuple[str, float]], initial_cash: float) -> dict[st
     }
 
 
-__all__ = ["Bar", "PriceSeries", "SignalMap", "SimulationResult", "momentum_scores", "run_simulation"]
+__all__ = [
+    "Bar",
+    "PriceSeries",
+    "SignalMap",
+    "SimulationResult",
+    "momentum_scores",
+    "positions_csv",
+    "run_simulation",
+]

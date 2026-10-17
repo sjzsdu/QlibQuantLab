@@ -2,7 +2,8 @@
 
 payload（API 层 ``ModelService.submit_train`` 固化的**执行快照**，模型行之后再被
 修改不影响本次运行）：``training_run_id / model_id / dataset_id / project_id /
-algo / hyperparams / target / factors（factor_snapshot） / split / max_instruments``。
+algo / hyperparams / target / factors（factor_snapshot） / split / max_instruments /
+reuse_factor_values / factor_value_sources``。
 
 落库口径（docs/stage5，四标注同回测）：
 - ``training_runs.metrics`` = 训练指标（train_ic / valid_ic / valid_ir / 样本数…）；
@@ -26,7 +27,7 @@ from qqlab.models import Dataset
 from qqlab.ports.compute import FactorSpec, TrainSpec
 from qqlab.repositories.job import JobRepository
 from qqlab.repositories.study import ModelRepository, TrainingRunRepository
-from qqlab.worker.handlers.backtest import _source_annotation
+from qqlab.worker.handlers.backtest import _source_annotation, _with_universe_limitation
 from qqlab.worker.handlers.base import run_job
 
 if TYPE_CHECKING:  # pragma: no cover - 仅类型
@@ -101,6 +102,8 @@ async def _execute(
         hyperparams=dict(payload.get("hyperparams") or {}),
         target=str(payload.get("target") or ""),
         max_instruments=int(payload.get("max_instruments") or 0),
+        universe=str(payload.get("universe") or "all"),
+        factor_value_sources=list(payload.get("factor_value_sources") or []),
     )
 
     result = await compute.train(spec, progress)
@@ -110,8 +113,17 @@ async def _execute(
 
     data_range = dict(result.data_range)
     data_range["source"] = await _source_annotation(session, scope, dataset)
-    data_range["limitations"] = result.limitations
+    data_range["universe"] = spec.universe
+    data_range["limitations"] = _with_universe_limitation(
+        result.limitations, spec.universe, engine=str(result.metrics.get("engine") or "")
+    )
     data_range["artifact_key"] = result.artifact_key
+    # 训练复用因子值（阶段 6）：口径记录进四标注 —— 复用了哪些计算记录（run_id）
+    data_range["reuse_factor_values"] = bool(spec.factor_value_sources)
+    if spec.factor_value_sources:
+        data_range["factor_value_runs"] = [
+            str(s.get("run_id") or "") for s in spec.factor_value_sources
+        ]
 
     await session.refresh(run)  # 训练期间 worker 自己也写过（无）；防 API 侧回填 job_id 竞态
     run.job_id = job.id  # 同上：关联当前执行任务（重试后即新 job）

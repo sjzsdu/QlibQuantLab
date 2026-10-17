@@ -156,3 +156,83 @@ def test_audit_is_tenant_scoped(client: TestClient, other_org_client: TestClient
     assert body["data"]["total"] == 0
     actions = other_org_client.get("/api/v1/audit-logs/actions").json()["data"]
     assert "project.create" not in actions
+
+
+# ------------------------------------------------------------------ 审计导出（阶段 6）
+def test_audit_export_needs_confirmation(client: TestClient) -> None:
+    login(client, "admin")
+    refused = client.get("/api/v1/audit-logs/export")
+    assert refused.status_code == 400
+    assert refused.json()["code"] == 1007
+
+
+def test_audit_export_streams_csv_and_records(client: TestClient) -> None:
+    import csv as _csv
+    import io as _io
+
+    login(client, "admin")
+    resp = client.get("/api/v1/audit-logs/export?format=csv&confirm=true")
+    assert resp.status_code == 200, resp.text
+    assert resp.headers["content-type"].startswith("text/csv")
+    assert "attachment;" in resp.headers["content-disposition"]
+
+    rows = list(_csv.reader(_io.StringIO(resp.text)))
+    assert rows[0] == [
+        "created_at",
+        "action",
+        "resource_type",
+        "resource_id",
+        "outcome",
+        "actor_username",
+        "ip",
+        "user_agent",
+        "request_id",
+        "detail",
+    ]
+    assert len(rows) >= 2
+    assert all(len(r) == 10 for r in rows)
+    actions_in_csv = {r[1] for r in rows[1:]}
+    assert "auth.login" in actions_in_csv
+
+    # 导出动作本身也留痕
+    body = client.get("/api/v1/audit-logs", params={"action": "audit.export"}).json()["data"]
+    assert body["total"] >= 1
+    assert body["items"][0]["detail"]["format"] == "csv"
+
+
+def test_audit_export_rejects_unknown_format(client: TestClient) -> None:
+    login(client, "admin")
+    resp = client.get("/api/v1/audit-logs/export?format=xlsx&confirm=true")
+    assert resp.status_code == 422
+
+
+def test_audit_export_denied_for_researcher(client: TestClient) -> None:
+    login(client, "researcher")
+    assert client.get("/api/v1/audit-logs/export?confirm=true").status_code == 403
+
+
+def test_audit_export_viewer_denied(client: TestClient) -> None:
+    login(client, "viewer")
+    assert client.get("/api/v1/audit-logs/export?confirm=true").status_code == 403
+
+
+def test_audit_export_auditor_allowed(client: TestClient) -> None:
+    login(client, "auditor")
+    resp = client.get("/api/v1/audit-logs/export?confirm=true")
+    assert resp.status_code == 200
+    assert resp.text.splitlines()[0].startswith("created_at,")
+
+
+def test_audit_export_is_tenant_scoped(client: TestClient, other_org_client: TestClient) -> None:
+    login(client, "admin")
+    marker = f"exptenant-{uuid.uuid4().hex[:8]}"
+    client.post(
+        "/api/v1/projects",
+        json={"name": marker},
+        headers=csrf_headers(client),
+    )
+    login(other_org_client, "admin")
+    resp = other_org_client.get("/api/v1/audit-logs/export?confirm=true")
+    assert resp.status_code == 200
+    assert marker not in resp.text
+    assert "project.create" not in resp.text

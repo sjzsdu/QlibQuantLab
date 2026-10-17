@@ -11,7 +11,7 @@ from qqlab.adapters.compute.stub_compute import (
     StubComputeProvider,
     make_synthetic_prices,
 )
-from qqlab.ports.compute import BacktestSpec, CostConfig, FactorSpec, TrainSpec
+from qqlab.ports.compute import BacktestSpec, CostConfig, FactorComputeSpec, FactorSpec, TrainSpec
 
 
 def _spec(**overrides) -> BacktestSpec:
@@ -267,3 +267,145 @@ def test_qlib_env_module_importable_without_qlib() -> None:
     assert callable(mod.build_qlib_config)
     assert callable(mod.qlib_online)
     assert callable(mod.probe_dataset_via_qlib)
+
+
+class TestStubFactorCompute:
+    """stub 因子计算（阶段 6 切片⑤）：确定性 + 与 qlib 同一 core.ic 口径/对象格式。"""
+
+    def _factor_spec(self, **overrides) -> FactorComputeSpec:
+        payload = dict(
+            org_id="dev-org",
+            project_id="00000000-0000-0000-0000-000000000011",
+            factor_id="00000000-0000-0000-0000-000000000012",
+            dataset_id="00000000-0000-0000-0000-000000000013",
+            expression="$close / Ref($close, 5) - 1",
+            start_date=STUB_START,
+            end_date="2024-01-31",
+        )
+        payload.update(overrides)
+        return FactorComputeSpec(**payload)
+
+    async def _run(self, **overrides):
+        async def no_progress(pct: int, message: str) -> None:  # noqa: ARG001
+            return None
+
+        return await StubComputeProvider().compute_factor(self._factor_spec(**overrides), no_progress)
+
+    async def test_metrics_shape(self) -> None:
+        result = await self._run()
+        for key in (
+            "coverage",
+            "ic_mean",
+            "ic_std",
+            "ic_ir",
+            "ic_positive_ratio",
+            "n_days",
+            "pooled_ic",
+            "n_instruments",
+            "engine",
+        ):
+            assert key in result.metrics, key
+        assert result.metrics["engine"] == "stub"
+        assert result.metrics["n_days"] > 0
+        assert 0 < result.metrics["coverage"] <= 1
+        assert -1.0 <= result.metrics["ic_mean"] <= 1.0
+
+    async def test_deterministic(self) -> None:
+        first, second = await self._run(), await self._run()
+        assert first.ic_csv == second.ic_csv
+        assert first.values_csv == second.values_csv
+        assert first.metrics == second.metrics
+
+    async def test_artifacts_format(self) -> None:
+        import gzip  # noqa: PLC0415
+
+        result = await self._run()
+        ic_lines = result.ic_csv.decode().splitlines()
+        assert ic_lines[0] == "date,ic"
+        day, ic = ic_lines[1].split(",")
+        assert day.startswith("2023")
+        assert -1.0 <= float(ic) <= 1.0
+
+        values = gzip.decompress(result.values_csv).decode().splitlines()
+        assert values[0] == "date,instrument,value"
+        assert len(values) > 100  # 30 标的 × ~250 日（动量 lookback 起步略去头部）
+
+    async def test_keys_isolated_by_run_id(self) -> None:
+        result = await self._run(run_id="run-1")
+        assert result.ic_key == "dev-org/factors/00000000-0000-0000-0000-000000000012/runs/run-1/stub_ic.csv"
+        assert result.values_key.endswith("/runs/run-1/stub_values.csv.gz")
+
+    async def test_four_annotations(self) -> None:
+        result = await self._run()
+        assert result.data_range["engine"] == "stub"
+        assert result.data_range["synthetic"] is True
+        assert result.data_range["expression"] == "$close / Ref($close, 5) - 1"
+        assert result.data_range["start"] <= result.data_range["end"]
+        assert "stub" in result.limitations
+
+
+class TestReusePanelHelpers:
+    """复用因子值的纯函数（阶段 6 切片⑥）：values.csv.gz → 面板 → 切片。"""
+
+    @staticmethod
+    def _gz(rows: list[str]) -> bytes:
+        import gzip  # noqa: PLC0415
+
+        return gzip.compress(("date,instrument,value\n" + "\n".join(rows) + "\n").encode())
+
+    def test_panel_roundtrip_shape_and_dtypes(self) -> None:
+        from qqlab.adapters.compute.qlib_compute import panel_from_values_csv  # noqa: PLC0415
+
+        raw = self._gz(
+            [
+                "2018-01-02,SH600000,0.100000",
+                "2018-01-03,SH600000,0.200000",
+                "2019-06-03,SZ000001,0.300000",
+            ]
+        )
+        panel = panel_from_values_csv(raw)
+        assert panel.shape == (3,)
+        # 索引形状与 D.features 对齐：(instrument: str, date: Timestamp)，末位为日期
+        assert panel.index.names == ["instrument", "date"]
+        assert isinstance(panel.index[0][0], str)
+        assert hasattr(panel.index[0][1], "year")
+        assert panel.dtype == "float64"
+
+    def test_panel_date_filter_closed_interval(self) -> None:
+        from qqlab.adapters.compute.qlib_compute import panel_from_values_csv  # noqa: PLC0415
+
+        raw = self._gz(
+            ["2017-12-29,SH600000,1.0", "2018-01-02,SH600000,2.0", "2018-12-31,SH600000,3.0"]
+        )
+        panel = panel_from_values_csv(raw, start="2018-01-01", end="2018-12-31")
+        days = [d.date().isoformat() for d in panel.index.get_level_values(1)]
+        assert days == ["2018-01-02", "2018-12-31"]  # 闭区间
+
+    def test_panel_header_only_raises(self) -> None:
+        import pytest  # noqa: PLC0415
+
+        from qqlab.adapters.compute.qlib_compute import panel_from_values_csv  # noqa: PLC0415
+
+        with pytest.raises(RuntimeError, match="因子值对象为空"):
+            panel_from_values_csv(self._gz([]))
+
+    def test_slice_panel_filters_instruments_and_dates(self) -> None:
+        import pandas as pd  # noqa: PLC0415
+
+        from qqlab.adapters.compute.qlib_compute import (  # noqa: PLC0415
+            panel_from_values_csv,
+            slice_panel,
+        )
+
+        raw = self._gz(
+            [
+                "2018-01-02,SH600000,0.1",
+                "2018-01-03,SZ000001,0.2",
+                "2019-01-02,SH600000,0.3",
+            ]
+        )
+        frame = pd.concat({"E1": panel_from_values_csv(raw)}, axis=1)
+        sliced = slice_panel(frame, ["SH600000"], "2018-01-01", "2018-12-31")
+        days = [d.date().isoformat() for d in sliced.index.get_level_values(1)]
+        assert days == ["2018-01-02"]  # 标的 + 日期双重过滤
+        assert list(sliced.columns) == ["E1"]

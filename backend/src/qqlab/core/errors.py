@@ -78,3 +78,14 @@ class NotImplementedYetError(AppError):
 
     code = 1010
     http_status = 501
+
+
+class UnprocessableInputError(AppError):
+    """参数格式合法但语义上无法处理（HTTP 422）。
+
+    与 FastAPI 的请求体校验 422（信封 code 1422）同状态码、不同信封码 ——
+    用于**动态**语义校验（如未知股票池：格式合法但数据集中不存在）。
+    """
+
+    code = 1011
+    http_status = 422

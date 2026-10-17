@@ -7,16 +7,26 @@
 
 from __future__ import annotations
 
+import gzip
 import hashlib
 import io
 import pickle
 import random
 
-from qqlab.adapters.compute.simulator import Bar, PriceSeries, momentum_scores, run_simulation
+from qqlab.adapters.compute.simulator import (
+    Bar,
+    PriceSeries,
+    momentum_scores,
+    positions_csv,
+    run_simulation,
+)
+from qqlab.core.ic import daily_rank_ics, ic_summary, pooled_rank_ic
 from qqlab.core.logging import get_logger
 from qqlab.ports.compute import (
     BacktestResult,
     BacktestSpec,
+    FactorComputeResult,
+    FactorComputeSpec,
     ProgressCallback,
     SignalMap,
     TrainResult,
@@ -123,11 +133,18 @@ class StubComputeProvider:
             end_date=spec.end_date or None,
         )
 
-        await progress(80, "stub: 上传净值曲线")
-        curve_key = f"{spec.org_id}/backtests/{spec.backtest_id or spec.strategy_id}/stub_curve.csv"
+        await progress(80, "stub: 上传净值曲线与持仓明细")
+        base_key = f"{spec.org_id}/backtests/{spec.backtest_id or spec.strategy_id}"
+        curve_key = f"{base_key}/stub_curve.csv"
+        positions_key = f"{base_key}/stub_positions.csv"
         if self._storage is not None:
             csv = "\n".join(f"{date},{nav:.4f}" for date, nav in sim.nav_curve)
             await self._storage.put(curve_key, csv.encode(), content_type="text/csv")
+            await self._storage.put(
+                positions_key,
+                positions_csv(sim.positions_history).encode(),
+                content_type="text/csv",
+            )
 
         data_range = {
             "start": sim.nav_curve[0][0],
@@ -150,7 +167,7 @@ class StubComputeProvider:
             data_range=data_range,
             cost_config=spec.cost.to_dict(),
             curve_key=curve_key,
-            positions_key=None,
+            positions_key=positions_key if self._storage is not None else None,
             limitations=(
                 "[stub] 使用合成随机行情（seed 确定性），结果**仅用于验证链路与费用口径**，"
                 f"不代表任何真实市场表现；{signal_note}。"
@@ -204,6 +221,91 @@ class StubComputeProvider:
             limitations=(
                 "[stub] 使用伪模型（无真实训练），指标为占位；仅用于验证 训练→artifact→"
                 "模型信号回测 链路与对象存储口径，不代表任何真实预测能力。"
+            ),
+        )
+
+    async def compute_factor(
+        self, spec: FactorComputeSpec, progress: ProgressCallback
+    ) -> FactorComputeResult:
+        """合成数据因子计算：5 日动量打分 vs 次日收益，走与 qlib 同一套 ``core.ic`` 口径。
+
+        用途：无 qlib 时仍能跑通 计算任务→IC 预览→对象存储 全链路，并作为 qlib
+        实现的对照组（同 CSV 格式、同落对象存储口径、同 metrics 键）。
+        """
+        import pandas as pd  # noqa: PLC0415
+
+        await progress(10, "stub: 生成合成行情")
+        seed = int(
+            hashlib.sha256(f"{spec.org_id}:{spec.factor_id}:{spec.dataset_id}".encode()).hexdigest()[:12],
+            16,
+        )
+        prices = make_synthetic_prices(
+            seed=seed, start=spec.start_date or None, end=spec.end_date or None
+        )
+        signals = momentum_scores(prices, lookback=5)
+
+        await progress(40, "stub: 计算日度 rank-IC")
+        closes = {ins: {b.date: b.close for b in bars} for ins, bars in prices.items()}
+        next_date: dict[str, dict[str, str | None]] = {}
+        for ins, series in closes.items():
+            days = sorted(series)
+            next_date[ins] = {d: (days[i + 1] if i + 1 < len(days) else None) for i, d in enumerate(days)}
+
+        factor_vals: dict[tuple[str, str], float] = {}
+        target_vals: dict[tuple[str, str], float] = {}
+        for date in sorted(signals):
+            for instrument, score in signals[date]:
+                series = closes.get(instrument)
+                nxt = next_date.get(instrument, {}).get(date)
+                if not series or nxt is None or date not in series:
+                    continue
+                factor_vals[(instrument, date)] = float(score)
+                target_vals[(instrument, date)] = series[nxt] / series[date] - 1.0
+
+        factor = pd.Series(factor_vals)  # tuple 键 → MultiIndex(instrument, date)：daily_rank_ics 约定
+        target = pd.Series(target_vals)
+        pairs = daily_rank_ics(factor, target)
+        summary = ic_summary([v for _, v in pairs])
+        total_cells = sum(len(b) for b in prices.values())
+        metrics = {
+            **summary,
+            "coverage": round(len(factor_vals) / max(total_cells, 1), 6),
+            "pooled_ic": pooled_rank_ic(factor, target),
+            "n_instruments": len(prices),
+            "engine": self.name,
+        }
+
+        await progress(80, "stub: 生成 IC 与因子值对象")
+        base_key = f"{spec.org_id}/factors/{spec.factor_id}/runs/{spec.run_id or spec.factor_id}"
+        ic_csv = ("date,ic\n" + "".join(f"{d},{v:.6f}\n" for d, v in pairs)).encode()
+        lines = ["date,instrument,value"]
+        for (instrument, date), value in sorted(factor_vals.items()):
+            lines.append(f"{date},{instrument},{float(value):.6f}")
+        values_csv = gzip.compress(("\n".join(lines) + "\n").encode())
+
+        all_days = sorted({b.date for bars in prices.values() for b in bars})
+        data_range = {
+            "start": all_days[0] if all_days else "",
+            "end": all_days[-1] if all_days else "",
+            "freq": "day",
+            "engine": self.name,
+            "synthetic": True,
+            "expression": spec.expression,
+            "version": spec.version,
+            "target": spec.target,
+            "n_instruments": len(prices),
+            "values_truncated": False,
+        }
+        return FactorComputeResult(
+            metrics=metrics,
+            data_range=data_range,
+            ic_csv=ic_csv,
+            values_csv=values_csv,
+            ic_key=f"{base_key}/stub_ic.csv",
+            values_key=f"{base_key}/stub_values.csv.gz",
+            limitations=(
+                "[stub] 使用合成随机行情（seed 确定性）：因子值=5 日动量、目标=次日收益，"
+                "IC 统计仅用于验证链路与口径，不代表任何真实市场表现。"
             ),
         )
 
