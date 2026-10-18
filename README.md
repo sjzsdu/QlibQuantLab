@@ -1,6 +1,19 @@
+<p align="center">
+  <img src="website/static/img/logo-horizontal-light.svg" alt="QlibQuantLab" width="320" />
+</p>
+
+<p align="center">
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-4F46E5.svg"></a>
+  <img alt="backend tests" src="https://img.shields.io/badge/backend%20tests-401%20passed-0891B2.svg">
+  <img alt="playwright e2e" src="https://img.shields.io/badge/playwright%20e2e-11%20passed-0891B2.svg">
+  <img alt="stage" src="https://img.shields.io/badge/stage-1--6%20delivered-64748B.svg">
+</p>
+
 # QlibQuantLab
 
 基于 [Qlib](https://github.com/microsoft/qlib) 的**开源多用户量化研究平台**：多组织数据与策略隔离、可插拔认证（Mock → Casdoor 只换环境变量）、训练与回测跑在独立 worker 容器里，Web 进程永不 `import qlib`。
+
+> 📖 **官网与用户文档**：[`website/`](website/) —— 项目主页、用户文档（`/docs`）与法务中心（`/legal`）在同一个 Docusaurus 站点里。本地预览：`cd website && npm ci && npm start`。
 
 > ⚠️ **免责声明**：本平台仅供研究、教学与技术验证使用，**不构成任何投资建议**。所有回测结果、指标与曲线均为历史数据的统计呈现，不代表未来收益；使用者的投资决策与由此产生的任何后果由使用者自行承担。详见 `GET /api/v1/legal/disclaimer` 与页面底部法务入口。
 
@@ -146,7 +159,8 @@ TEST_REDIS_URL=redis://localhost:16379/9 uv run pytest tests/contract -q
 - `docs/stage5/` — 阶段 5：因子快照 → 训练 → 双信号回测 → 四标注 → 任务中心
 - `docs/stage6/` — 阶段 6：审计导出、RBAC 扫描、universe、导出/持仓/打印、因子计算/IC、训练复用、合规页、Playwright e2e
 - 阶段 1 风险登记册与七阶段路线图见 `docs/stage1/08-risks-and-roadmap.md`
+- **面向外部用户的文档**在 `website/docs/`（5 分钟跑起来 / 核心概念 / 模块指南 / 部署），与上面的内部交付文档刻意分开
 
 ## License
 
-MIT（阶段 7 前定稿，见 `docs/stage1/02-repo-structure.md`）。
+MIT，见仓库根 [`LICENSE`](LICENSE)。站点 License 页（`/legal/license`）由该文件在构建时生成，不另存一份副本。

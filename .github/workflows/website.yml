@@ -1,0 +1,102 @@
+name: website
+
+# 官网（website/）的构建与部署。
+#
+# - PR：只构建，不部署。链接写错 / 法务源文件与站点不同源都会让这一步红。
+# - push main：构建 + 部署 GitHub Pages。
+# - 手动：workflow_dispatch 可单独重发。
+#
+# ⚠️ GitHub Pages 对私有仓库需要 Pro/Team。因此 deploy 作业默认**不跑**：
+#    需要先在仓库 Variables 里设置 `PAGES_ENABLED=true`（并启用 Pages → Source: Actions）。
+#    不用 Pages 时什么都不用做，`build` 作业照旧在 PR 上做构建与链接校验；
+#    换 Cloudflare Pages / Netlify 只需要改站点侧 docusaurus.config.ts 的 url（不动本文件）。
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'website/**'
+      - 'backend/src/qqlab/legal/**'
+      - 'LICENSE'
+      - '.github/workflows/website.yml'
+  pull_request:
+    paths:
+      - 'website/**'
+      - 'backend/src/qqlab/legal/**'
+      - 'LICENSE'
+      - '.github/workflows/website.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: website-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build site
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: website
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      # build 会先跑 scripts/sync-legal.mjs：法务页必须与后端 qqlab/legal 同源。
+      # onBrokenLinks / onBrokenAnchors / onBrokenMarkdownLinks 均为 throw，
+      # 任何死链都会让构建失败。
+      - name: Build
+        run: npm run build
+        env:
+          SITE_URL: ${{ vars.SITE_URL || 'https://qqlab.example.com' }}
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: website-build
+          path: website/build
+          retention-days: 7
+
+  deploy:
+    name: deploy to GitHub Pages
+    needs: build
+    # 没有显式开启 Pages（vars.PAGES_ENABLED=true）就不部署，避免合并后 main 上平白变红。
+    if: >-
+      github.event_name != 'pull_request'
+      && github.ref == 'refs/heads/main'
+      && vars.PAGES_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: website-build
+          path: website/build
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: website/build
+
+      - id: deployment
+        uses: actions/deploy-pages@v4

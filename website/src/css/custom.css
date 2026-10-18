@@ -1,0 +1,680 @@
+/**
+ * QlibQuantLab 官网主题。
+ *
+ * 颜色 token 与 `brand/README.md` 同源（对比度实测表在那边），改色只改这里 + make_assets.py，
+ * 并且必须重跑 `python3 brand/verify_assets.py`（它会校验白字压主色、白笔画压渐变末端的比值）。
+ *
+ * 硬约束：`#06B6D4` 只许出现在深色底上，永不压白字/白笔画（2.43:1，不达标）。
+ */
+
+/* ---------------------------------------------------------------- token */
+
+:root {
+  --qql-indigo: #4f46e5;
+  --qql-indigo-deep: #3f37c9;
+  --qql-cyan: #06b6d4;
+  --qql-cyan-deep: #0891b2;
+  --qql-amber: #fbbf24;
+  --qql-ink: #0f172a;
+  --qql-slate: #64748b;
+  --qql-mist: #c7d2e5;
+  --qql-bg-dark: #0a0f1e;
+
+  --qql-hairline: #e2e8f0;
+  --qql-hairline-dark: #1e2a44;
+  --qql-surface: #f8fafc;
+  --qql-surface-dark: #111a2e;
+
+  --qql-font-latin: Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif;
+  --qql-font-cjk: 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', system-ui, sans-serif;
+  --qql-font-mono: 'JetBrains Mono', SFMono-Regular, Menlo, Consolas, monospace;
+
+  /* Infima 主色阶：全部由 #4F46E5 派生，避免默认绿 */
+  --ifm-color-primary: #4f46e5;
+  --ifm-color-primary-dark: #3f37c9;
+  --ifm-color-primary-darker: #3730b2;
+  --ifm-color-primary-darkest: #2d2793;
+  --ifm-color-primary-light: #6f68ea;
+  --ifm-color-primary-lighter: #8f89ef;
+  --ifm-color-primary-lightest: #b8b4f5;
+
+  --ifm-font-family-base: var(--qql-font-latin), var(--qql-font-cjk);
+  --ifm-font-family-monospace: var(--qql-font-mono), monospace;
+  --ifm-heading-font-weight: 700;
+  --ifm-code-font-size: 92%;
+  --ifm-navbar-height: 4rem;
+  --ifm-global-radius: 12px;
+  --ifm-link-color: var(--ifm-color-primary-dark);
+  --ifm-toc-border-color: var(--qql-hairline);
+  --docusaurus-highlighted-code-line-bg: rgba(79, 70, 229, 0.12);
+}
+
+html[data-theme='dark'] {
+  /* Infima 的暗色变量挂在 html[data-theme=dark]（specificity 0,1,1），
+     所以这里的覆盖也必须带 html 前缀，否则会被它压掉（踩过一次）。 */
+  --ifm-navbar-background-color: #0b1120;
+
+  /* 暗色底上把主色提亮，保证文字对比度；底仍用品牌 ink-dark */
+  --ifm-color-primary: #8f89ef;
+  --ifm-color-primary-dark: #6f68ea;
+  --ifm-color-primary-darker: #5f58e7;
+  --ifm-color-primary-darkest: #4f46e5;
+  --ifm-color-primary-light: #afabf4;
+  --ifm-color-primary-lighter: #c5c2f7;
+  --ifm-color-primary-lightest: #dedcfb;
+
+  --ifm-background-color: var(--qql-bg-dark);
+  --ifm-background-surface-color: var(--qql-surface-dark);
+  --ifm-font-color-base: #e8edf7;
+  --ifm-link-color: #afabf4;
+  --ifm-toc-border-color: var(--qql-hairline-dark);
+  --ifm-table-stripe-background: rgba(255, 255, 255, 0.03);
+  --ifm-hr-border-color: var(--qql-hairline-dark);
+  --docusaurus-highlighted-code-line-bg: rgba(143, 137, 239, 0.2);
+}
+
+html {
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* ---------------------------------------------------------------- navbar / footer */
+
+.navbar {
+  border-bottom: 1px solid var(--qql-hairline);
+  box-shadow: none;
+}
+
+html[data-theme='dark'] .navbar {
+  border-bottom-color: var(--qql-hairline-dark);
+}
+
+.navbar__logo {
+  height: 32px;
+  width: 32px;
+}
+
+.navbar__title {
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.navbar__link {
+  font-weight: 500;
+}
+
+.footer--dark {
+  --ifm-footer-background-color: #070b16;
+  --ifm-footer-link-color: var(--qql-mist);
+  --ifm-footer-title-color: #f4f7fd;
+  border-top: 1px solid var(--qql-hairline-dark);
+}
+
+.footer-legal {
+  max-width: 60rem;
+  margin: 0 auto 0.5rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--qql-hairline-dark);
+  border-radius: 10px;
+  font-size: 0.8rem;
+  line-height: 1.7;
+  color: var(--qql-mist);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.footer-legal strong {
+  color: #fbbf24;
+}
+
+.footer-legal b {
+  color: #f4f7fd;
+}
+
+.footer-copy {
+  font-size: 0.78rem;
+  color: var(--qql-slate);
+}
+
+/* ---------------------------------------------------------------- 通用版面 */
+
+.qql-section {
+  padding: 4.5rem 0;
+}
+
+.qql-section--tight {
+  padding: 3rem 0;
+}
+
+.qql-section--surface {
+  background: var(--qql-surface);
+  border-top: 1px solid var(--qql-hairline);
+  border-bottom: 1px solid var(--qql-hairline);
+}
+
+html[data-theme='dark'] .qql-section--surface {
+  background: var(--qql-surface-dark);
+  border-color: var(--qql-hairline-dark);
+}
+
+.qql-container {
+  max-width: 1140px;
+  margin: 0 auto;
+  padding: 0 1.25rem;
+}
+
+.qql-eyebrow {
+  display: inline-block;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ifm-color-primary);
+  margin-bottom: 0.75rem;
+}
+
+.qql-h2 {
+  font-size: clamp(1.6rem, 3.2vw, 2.2rem);
+  letter-spacing: -0.02em;
+  margin-bottom: 0.75rem;
+}
+
+.qql-lead {
+  font-size: 1.02rem;
+  line-height: 1.8;
+  color: var(--qql-slate);
+  max-width: 62ch;
+}
+
+html[data-theme='dark'] .qql-lead {
+  color: var(--qql-mist);
+}
+
+.qql-grid {
+  display: grid;
+  gap: 1.25rem;
+}
+
+.qql-grid--2 {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr));
+}
+
+.qql-grid--3 {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 17rem), 1fr));
+}
+
+/* ---------------------------------------------------------------- hero */
+
+.qql-hero {
+  position: relative;
+  overflow: hidden;
+  padding: 5rem 0 4rem;
+  border-bottom: 1px solid var(--qql-hairline);
+  background:
+    radial-gradient(1100px 480px at 80% -12%, rgba(6, 182, 212, 0.16), transparent 62%),
+    radial-gradient(820px 420px at 8% -20%, rgba(79, 70, 229, 0.18), transparent 60%),
+    linear-gradient(180deg, #ffffff 0%, var(--qql-surface) 100%);
+}
+
+html[data-theme='dark'] .qql-hero {
+  border-bottom-color: var(--qql-hairline-dark);
+  background:
+    radial-gradient(1100px 480px at 82% -14%, rgba(6, 182, 212, 0.22), transparent 62%),
+    radial-gradient(820px 420px at 6% -18%, rgba(79, 70, 229, 0.32), transparent 60%),
+    linear-gradient(180deg, #0b1120 0%, var(--qql-bg-dark) 100%);
+}
+
+.qql-hero__inner {
+  display: grid;
+  gap: 2.5rem;
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+  align-items: center;
+}
+
+@media (max-width: 996px) {
+  .qql-hero {
+    padding: 3rem 0 2.5rem;
+  }
+
+  .qql-hero__inner {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.qql-hero__badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.3rem 0.7rem;
+  border: 1px solid var(--qql-hairline);
+  border-radius: 999px;
+  background: #fff;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--qql-slate);
+  margin-bottom: 1.1rem;
+}
+
+html[data-theme='dark'] .qql-hero__badge {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: var(--qql-hairline-dark);
+  color: var(--qql-mist);
+}
+
+.qql-hero__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--qql-indigo);
+}
+
+.qql-hero__title {
+  font-size: clamp(2rem, 4.6vw, 3.1rem);
+  line-height: 1.16;
+  letter-spacing: -0.03em;
+  margin: 0 0 1rem;
+}
+
+.qql-hero__title em {
+  font-style: normal;
+  background: linear-gradient(96deg, var(--qql-indigo), var(--qql-cyan-deep));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.qql-hero__sub {
+  font-size: 1.06rem;
+  line-height: 1.85;
+  color: var(--qql-slate);
+  margin-bottom: 1.6rem;
+  max-width: 46ch;
+}
+
+html[data-theme='dark'] .qql-hero__sub {
+  color: var(--qql-mist);
+}
+
+.qql-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.qql-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.72rem 1.3rem;
+  border-radius: 10px;
+  font-weight: 650;
+  font-size: 0.95rem;
+  border: 1px solid transparent;
+  transition:
+    transform 0.16s ease,
+    box-shadow 0.16s ease,
+    background-color 0.16s ease;
+}
+
+.qql-btn:hover {
+  text-decoration: none;
+  transform: translateY(-1px);
+}
+
+.qql-btn--primary {
+  background: var(--qql-indigo);
+  color: #fff;
+  box-shadow: 0 8px 22px rgba(79, 70, 229, 0.28);
+}
+
+.qql-btn--primary:hover {
+  background: var(--qql-indigo-deep);
+  color: #fff;
+}
+
+.qql-btn--ghost {
+  background: transparent;
+  border-color: var(--qql-hairline);
+  color: var(--qql-ink);
+}
+
+html[data-theme='dark'] .qql-btn--ghost {
+  border-color: var(--qql-hairline-dark);
+  color: #e8edf7;
+}
+
+.qql-btn--ghost:hover {
+  border-color: var(--ifm-color-primary);
+  color: var(--ifm-color-primary);
+}
+
+/* ---------------------------------------------------------------- 终端 / 代码片 */
+
+.qql-terminal {
+  border: 1px solid var(--qql-hairline-dark);
+  border-radius: 14px;
+  overflow: hidden;
+  background: #0b1120;
+  box-shadow: 0 18px 48px rgba(15, 23, 42, 0.22);
+}
+
+.qql-terminal__bar {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.6rem 0.85rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.qql-terminal__bar span {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.qql-terminal__title {
+  margin-left: 0.5rem;
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #94a3b8;
+  font-family: var(--qql-font-mono);
+}
+
+.qql-terminal pre {
+  margin: 0;
+  padding: 1rem 1.15rem;
+  background: transparent;
+  color: #e8edf7;
+  font-size: 0.85rem;
+  line-height: 1.75;
+  overflow-x: auto;
+}
+
+.qql-terminal code {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  color: inherit;
+  font-size: inherit;
+  white-space: pre;
+}
+
+.qql-terminal .qql-cmd {
+  color: #fbbf24;
+}
+
+.qql-terminal .qql-comment {
+  color: #7c8aa5;
+}
+
+/* ---------------------------------------------------------------- 卡片 */
+
+.qql-card {
+  position: relative;
+  padding: 1.4rem 1.3rem;
+  border: 1px solid var(--qql-hairline);
+  border-radius: 14px;
+  background: #fff;
+  transition:
+    border-color 0.16s ease,
+    box-shadow 0.16s ease,
+    transform 0.16s ease;
+}
+
+.qql-card:hover {
+  border-color: var(--ifm-color-primary-light);
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.08);
+  transform: translateY(-2px);
+}
+
+html[data-theme='dark'] .qql-card {
+  background: rgba(255, 255, 255, 0.03);
+  border-color: var(--qql-hairline-dark);
+}
+
+html[data-theme='dark'] .qql-card:hover {
+  border-color: var(--ifm-color-primary);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.4);
+}
+
+.qql-card__icon {
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  background: rgba(79, 70, 229, 0.1);
+  color: var(--qql-indigo);
+  font-weight: 700;
+  font-size: 1rem;
+  margin-bottom: 0.9rem;
+  font-family: var(--qql-font-mono);
+}
+
+html[data-theme='dark'] .qql-card__icon {
+  background: rgba(143, 137, 239, 0.16);
+  color: #afabf4;
+}
+
+.qql-card h3 {
+  font-size: 1.02rem;
+  margin: 0 0 0.5rem;
+  letter-spacing: -0.01em;
+}
+
+.qql-card p {
+  margin: 0;
+  font-size: 0.9rem;
+  line-height: 1.75;
+  color: var(--qql-slate);
+}
+
+html[data-theme='dark'] .qql-card p {
+  color: var(--qql-mist);
+}
+
+.qql-card__meta {
+  display: inline-block;
+  margin-top: 0.8rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--ifm-color-primary);
+  font-family: var(--qql-font-mono);
+}
+
+/* ---------------------------------------------------------------- 差异化 / 数据条 */
+
+.qql-facts {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr));
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.qql-fact {
+  padding: 1.1rem 1.2rem;
+  border-left: 3px solid var(--ifm-color-primary);
+  background: #fff;
+  border-radius: 0 10px 10px 0;
+  border-top: 1px solid var(--qql-hairline);
+  border-right: 1px solid var(--qql-hairline);
+  border-bottom: 1px solid var(--qql-hairline);
+}
+
+html[data-theme='dark'] .qql-fact {
+  background: rgba(255, 255, 255, 0.03);
+  border-color: var(--qql-hairline-dark);
+  border-left-color: var(--ifm-color-primary);
+}
+
+.qql-fact strong {
+  display: block;
+  font-size: 1.35rem;
+  letter-spacing: -0.02em;
+  font-family: var(--qql-font-mono);
+}
+
+.qql-fact span {
+  font-size: 0.82rem;
+  color: var(--qql-slate);
+}
+
+html[data-theme='dark'] .qql-fact span {
+  color: var(--qql-mist);
+}
+
+/* ---------------------------------------------------------------- 截图 */
+
+.qql-shot {
+  margin: 0;
+}
+
+.qql-shot img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 12px;
+  border: 1px solid var(--qql-hairline);
+  box-shadow: 0 16px 40px rgba(15, 23, 42, 0.12);
+}
+
+html[data-theme='dark'] .qql-shot img {
+  border-color: var(--qql-hairline-dark);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
+}
+
+.qql-shot figcaption {
+  margin-top: 0.65rem;
+  font-size: 0.8rem;
+  color: var(--qql-slate);
+  text-align: center;
+}
+
+html[data-theme='dark'] .qql-shot figcaption {
+  color: var(--qql-mist);
+}
+
+/* ---------------------------------------------------------------- 架构图 */
+
+.qql-arch {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+  padding: 1.5rem;
+  border: 1px solid var(--qql-hairline);
+  border-radius: 16px;
+  background:
+    linear-gradient(180deg, rgba(79, 70, 229, 0.04), transparent 40%),
+    #fff;
+}
+
+html[data-theme='dark'] .qql-arch {
+  border-color: var(--qql-hairline-dark);
+  background:
+    linear-gradient(180deg, rgba(79, 70, 229, 0.12), transparent 40%),
+    rgba(255, 255, 255, 0.02);
+}
+
+.qql-arch__row {
+  display: grid;
+  gap: 0.7rem;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 9.5rem), 1fr));
+}
+
+.qql-arch__node {
+  padding: 0.7rem 0.8rem;
+  border: 1px solid var(--qql-hairline);
+  border-radius: 10px;
+  background: #fff;
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+html[data-theme='dark'] .qql-arch__node {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: var(--qql-hairline-dark);
+}
+
+.qql-arch__node b {
+  display: block;
+  font-size: 0.86rem;
+  margin-bottom: 0.15rem;
+}
+
+.qql-arch__node code {
+  font-size: 0.72rem;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  color: var(--qql-slate);
+}
+
+html[data-theme='dark'] .qql-arch__node code {
+  color: var(--qql-mist);
+}
+
+.qql-arch__node--emph {
+  border-color: var(--ifm-color-primary);
+  box-shadow: inset 0 0 0 1px rgba(79, 70, 229, 0.18);
+}
+
+.qql-arch__node--worker {
+  border-style: dashed;
+  border-color: var(--qql-cyan-deep);
+}
+
+.qql-arch__arrow {
+  text-align: center;
+  font-size: 0.75rem;
+  letter-spacing: 0.1em;
+  color: var(--qql-slate);
+  font-family: var(--qql-font-mono);
+}
+
+.qql-arch__legend {
+  margin-top: 0.4rem;
+  font-size: 0.78rem;
+  color: var(--qql-slate);
+}
+
+html[data-theme='dark'] .qql-arch__legend {
+  color: var(--qql-mist);
+}
+
+/* ---------------------------------------------------------------- 文档页微调 */
+
+/* 不要覆盖 Infima 对 table 的 display（block + overflow-x），否则宽表会撑破
+   375px 视口；这里只收紧字号与单元格内边距。 */
+.markdown td,
+.markdown th {
+  font-size: 0.9rem;
+  padding: 0.5rem 0.7rem;
+}
+
+.menu__link {
+  font-size: 0.9rem;
+}
+
+.pagination-nav__label {
+  font-size: 0.85rem;
+}
+
+/* ---------------------------------------------------------------- 可访问性 */
+
+a:focus-visible,
+button:focus-visible,
+.qql-btn:focus-visible {
+  outline: 2px solid var(--ifm-color-primary);
+  outline-offset: 3px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
