@@ -27,7 +27,7 @@
 | 4 | 项目 / 数据 / 因子 | ✅ 已交付，**247 个测试全绿** + live smoke 29/29 → `docs/stage4/` |
 | 5 | 训练 → 回测 → 可视化 → 任务中心 | ✅ 已交付，**304 个测试全绿** + live smoke 43/43 + 浏览器冒烟 7 页 → `docs/stage5/` |
 | 6 | 审计 / 权限 / 合规 / e2e / README 定稿 | ✅ 已交付，**401 个测试全绿** + live smoke 34/34 + Playwright e2e 11/11 → `docs/stage6/` |
-| 7 | 接入 Casdoor + 生产部署文档 | — |
+| 7 | 接入 Casdoor + 生产部署文档 | ✅ 已交付，**444 个测试全绿** + stage7 smoke 17/17 + stage6 smoke 34/34 + e2e 11/11 → `docs/stage7/` |
 
 每阶段固定交付：**目标 → 文件树 → 代码 → 启动命令 → 测试方法 → 已知风险 → 验收清单**，你确认后才进入下一阶段。
 
@@ -131,7 +131,7 @@ QlibQuantLab/
 
 **多租户**：`OrgScope` 只来自会话，`BaseRepo` 强制拼 `org_id` 过滤，跨组织读/改/删统一返回 404（不泄露存在性）。策略与项目默认 `private`，删除类操作必须 `?confirm=true`。
 
-**认证**：阶段 1–6 用 `MockAuthProvider`（`/login` 一键进入，4 个 profile 可切角色）；会话是平台自己签发的 JWT cookie，IdP 令牌只在后端留存 —— 阶段 7 换 Casdoor 时**只改环境变量，前后端代码零改动**；生产环境若 `AUTH_PROVIDER=mock` 会拒绝启动。
+**认证**：阶段 1–6 用 `MockAuthProvider`（`/login` 一键进入，4 个 profile 可切角色）；会话是平台自己签发的 JWT cookie，IdP 令牌只在后端留存 —— 阶段 7 已实装 `CasdoorAuthProvider`（OIDC 授权码 + PKCE S256 + JWKS RS256，fail-closed 身份映射），切换**只改环境变量，前后端代码零改动**（已实测，见 `docs/stage7/`）；生产环境若 `AUTH_PROVIDER=mock` 会拒绝启动。dev 体验：`docker compose --profile casdoor up -d casdoor` 后按 `docs/stage7/05-casdoor-deployment.md` 切换。
 
 **统一响应信封**：`{ code, message, data, request_id }`，`request_id` 同时出现在响应头 `X-Request-ID`、结构化日志与 `audit_logs`，可三方串联。非安全方法强制双提交 CSRF（`qqlab_csrf` cookie + `X-CSRF-Token` 头）。
 

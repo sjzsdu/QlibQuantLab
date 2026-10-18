@@ -1,0 +1,24 @@
+# 阶段 7 冒烟临时覆盖：把 backend 切到 Casdoor OIDC（不改 .env）
+#
+#   起：docker compose -f docker-compose.yml -f docker-compose.casdoor-smoke.yml up -d backend
+#   跑：python3 scripts/stage7_smoke.py
+#   还原：docker compose up -d backend   # 只用默认 compose 文件即不含本覆盖
+#
+# dev 双地址拓扑（D7-7）：浏览器走宿主映射端口 ISSUER，后端容器走 compose 服务名 INTERNAL_URL。
+# 角色/组织映射用默认直通（{}）—— ROLE_MAP 语义已由单测覆盖，冒烟验直通链路。
+# 种子（deploy/casdoor/init_data.json）：org=qqlab / app=qqlab-dev-client /
+#   smoke-admin(admin) / smoke-viewer(viewer) / smoke-norole(无角色) / smoke-unknown(operator 未知角色)。
+services:
+  backend:
+    environment:
+      AUTH_PROVIDER: casdoor
+      CASDOOR_ISSUER: http://localhost:8001
+      CASDOOR_INTERNAL_URL: http://casdoor:8000
+      CASDOOR_CLIENT_ID: qqlab-dev-client
+      CASDOOR_CLIENT_SECRET: qqlab-dev-secret-0123456789abcdef
+      CASDOOR_REDIRECT_URI: http://localhost:3000/api/v1/auth/callback
+      CASDOOR_SCOPES: openid profile email
+      CASDOOR_ROLE_CLAIM: roles
+      CASDOOR_ORG_ID_CLAIM: owner
+      CASDOOR_ROLE_MAP: "{}"
+      CASDOOR_ORG_MAP: "{}"

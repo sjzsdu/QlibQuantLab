@@ -113,7 +113,8 @@ STORAGE_S3_ACCESS_KEY=
 STORAGE_S3_SECRET_KEY=
 STORAGE_S3_PATH_STYLE=false
 
-# Casdoor（阶段 7）
+# Casdoor（阶段 7 —— 草案；实测定稿值见 docs/stage7/03 §5.1 与根 .env.example：
+#   ORG_ID_CLAIM 定为 owner、新增 INTERNAL_URL（dev 双地址）与 ORG_MAP、ROLE_MAP 默认 {} 直通 fail-closed）
 AUTH_PROVIDER=casdoor
 CASDOOR_ISSUER=
 CASDOOR_CLIENT_ID=
@@ -461,6 +462,9 @@ serversTransport:
 
 ## 4. 生产环境切换清单（阶段 7 交付，先列在此）
 
+> ✅ **阶段 7 已定稿**（实测校准版：labels 已进 `docker-compose.prod.yml`、ORG_ID_CLAIM 定为 `owner`、补
+> `WORKER_STALE_JOB_MINUTES` 与 Redis 拆分方案）：[`docs/stage7/03-production-deployment.md`](../stage7/03-production-deployment.md) §5。
+
 ### 4.1 必改环境变量
 
 | 变量 | 改成 | 校验方式 |
@@ -490,6 +494,10 @@ serversTransport:
 7. 断网演练：停掉外部 Redis → `/ready` 变红并给出「Qlib-Server 依赖 Redis」的明确提示。
 
 ## 5. Casdoor 侧配置说明（阶段 7 落 `deploy/casdoor/README.md`）
+
+> ✅ **已落**：[`deploy/casdoor/README.md`](../../deploy/casdoor/README.md)（dev 种子语义 / 镜像 digest / manifest 探测）
+> 与 [`docs/stage7/05-casdoor-deployment.md`](../stage7/05-casdoor-deployment.md)（生产指南 / R7-2 实测回写）。
+> 实测修正：登出落点须注册进应用 RedirectUrls（`/login` 落地）；组织 claim 用 `owner` 即可，无需 Casdoor 侧额外字段。
 
 1. **Organization**：建组织 `qqlab`；把研究用户加入该组织。
 2. **Application**：

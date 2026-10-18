@@ -2,21 +2,19 @@
 
 > 口径：运维降级项**只评估、写入本文档**（D6-11），不在本阶段做。
 
-## R6-1 worker 镜像 libgomp1 固化（承接 S5-12）— 中风险
+## R6-1 worker 镜像 libgomp1 固化（承接 S5-12）— ✅ 已解决（2026-10-17）
 
-**现状**：Docker Hub 不可达导致 `docker compose build worker` 失败；阶段 5 的 qlib 运行时依赖 `libgomp1` 为**容器内热修**（`apt-get install` 进运行容器，未固化进镜像）。容器重建即丢失 → 届时 train/backtest/factor_compute 全部失败且报错隐蔽（`libgomp.so.1: cannot open shared object file`）。
+**原现状**：Docker Hub 不可达导致 `docker compose build worker` 失败；阶段 5 的 qlib 运行时依赖 `libgomp1` 为**容器内热修**（`apt-get install` 进运行容器，未固化进镜像）。容器重建即丢失 → 届时 train/backtest/factor_compute 全部失败且报错隐蔽（`libgomp.so.1: cannot open shared object file`）。
 
-**已做**：`worker/Dockerfile` 已补 `libgomp1`（代码侧就绪）；容器内热修保证当前开发栈可用。
+**解决**（2026-10-17 上午，见 docs/stage5/06-risks.md S5-12）：Docker Hub 仍不可达，改走镜像源**按 digest 精确拉取** `docker.1ms.run/library/python@sha256:e529028…`（amd64，与 BuildKit 所需 manifest digest 一致）→ 本地 retag `python:3.11-slim` → `docker compose build worker` 成功 → 容器重建。验证：镜像内 `ldconfig -p` 含 `libgomp.so.1 (x86-64)`；容器内 `import lightgbm 4.7.0` OpenMP 链接通过；阶段 6 smoke 34/34 中的 qlib 真实训练/因子计算均经此镜像执行成功。
 
-**后续**：Docker Hub 恢复后 `docker compose build worker && docker compose up -d worker`，并在容器里 `python -c "import lightgbm"` 验证。
-
-## R6-2 worker 崩溃留下孤儿 `running` 任务 — 中风险
+## R6-2 worker 崩溃留下孤儿 `running` 任务 — 中风险 → ✅ 已解决（阶段 7，见下）
 
 **现象**（本阶段实测）：OrbStack hang 后 worker 重启，DB 里残留 `status=running` 的行（消费者已死）。API cancel 只能置 `cancel_requested`（设计上要消费者在进度检查点确认），无消费者的任务**永不收敛**；冒烟/调度侧看到的 running 计数被污染。
 
 **已做**：dev 库人工 `UPDATE jobs SET status='canceled'` 收敛（记录在 05-testing §5）。
 
-**后续（阶段 7）**：任务重试/恢复机制 —— worker 启动时按 `locked_by` + `heartbeat_at` 超时（如 10min）把 stale running 行改回 queued（attempts 未耗尽）或 failed（耗尽），加架构测试。这是生产部署前必须项。
+**解决**（阶段 7）：worker 启动消费前调用 `repositories/job.py::recover_stale_running_jobs` —— `heartbeat_at` 早于 `WORKER_STALE_JOB_MINUTES`（默认 10，env 可调）的 `running` 行：attempts 未耗尽 → 回 `queued` 重投，耗尽 → `failed`。**单副本前提**（多副本下「心跳超时」判据有双执行风险，扩副本前须改 `locked_by`/租约比对）写入函数注释、`.env.example` 与 [docs/stage7/06-risks.md](../stage7/06-risks.md)。实证：`tests/unit/test_worker_recover.py` 6 例 + 冒烟期间多次 worker 重启零残留。
 
 ## R6-3 登录限流与冒烟/e2e 共享额度 — 低风险
 

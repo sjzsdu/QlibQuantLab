@@ -207,7 +207,7 @@ flowchart LR
     end
     D --> P
     P --> M["MockAuthProvider<br/>AUTH_PROVIDER=mock"]
-    P --> C["CasdoorAuthProvider<br/>AUTH_PROVIDER=casdoor<br/>阶段 7 实现"]
+    P --> C["CasdoorAuthProvider<br/>AUTH_PROVIDER=casdoor<br/>阶段 7 已实装 ↗ docs/stage7/02"]
 
     M --> MJ["签发/校验本平台 JWT<br/>HS256 + APP_JWT_SECRET<br/>payload: sub/org/roles/exp"]
     C --> CO["OIDC Authorization Code + PKCE<br/>JWKS 验签（RS256）<br/>id_token claims → org/roles 映射"]
@@ -218,7 +218,7 @@ flowchart LR
 | 阶段 | 1–6（开发默认） | 7 |
 | `get_login_url` | `/api/v1/auth/mock/enter?profile=admin` | `{issuer}/login/oauth/authorize?client_id&redirect_uri&scope&state&code_challenge` |
 | `handle_callback` | 不需要（直接 `enter`） | 换 token → 解 `id_token` → upsert `users`/`org_members` → 签发本平台会话 |
-| `verify_token` | 校验本平台 HS256 JWT | 校验 Casdoor JWT（RS256 / JWKS 缓存于 CacheProvider） |
+| `verify_token` | 校验本平台 HS256 JWT | **同样**校验本平台 HS256 JWT（D7-8：IdP 令牌只在回调用一次，JWKS 仅用于回调期验签 `id_token`） |
 | 会话载体 | HttpOnly + Secure(生产) + SameSite=Lax cookie `qqlab_session` | **同样**是本平台会话 cookie（IdP 令牌只在后端留存） |
 | roles 来源 | 环境变量 `MOCK_USER_ROLES` 或 profile 参数 | Casdoor claim `roles`（`CASDOOR_ROLE_CLAIM`，可配映射） |
 | 需要新增表 | 无 | 无（`users.auth_provider+external_id` 已预留） |
@@ -266,6 +266,10 @@ export function useCurrentUser(): {
 3. 填 CASDOOR_ISSUER / CLIENT_ID / CLIENT_SECRET / REDIRECT_URI / ROLE_CLAIM
 ```
 业务代码、数据库表、权限逻辑、前端 —— **零改动**。
+
+> ✅ **阶段 7 已按此落地并实测**：`CasdoorAuthProvider` 全量实装（PKCE S256 无状态派生、JWKS 缓存 + 未知 kid 强刷、
+> roles 三形态归一、fail-closed、owner 组织直通），实机冒烟 17/17 —— 见 [`docs/stage7/02-casdoor-integration.md`](../stage7/02-casdoor-integration.md)。
+> 实装新增的两个 env（本节草案未列）：`CASDOOR_INTERNAL_URL`（dev 双地址，D7-7）与 `CASDOOR_ORG_MAP`。
 
 ## 3. RBAC 权限矩阵
 
