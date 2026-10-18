@@ -1,12 +1,14 @@
 "use client";
 
 /**
- * 登录页：MockAuthProvider 一键进入。
- * 流程：GET /api/v1/auth/login → 拿到 { url } → window.location.href 跳转完成登录。
+ * 登录页：按后端 auth_provider 自适应（阶段 7 · D7-10）。
+ * - mock（阶段 1-6 默认）：开发环境一键进入 + 身份选择器（UI 与阶段 6 逐像素一致）；
+ * - casdoor：中性「统一身份认证」文案 + 「登录」按钮 —— 生产环境不露开发入口。
+ * 流程不变：GET /api/v1/auth/login → 拿到 { url } → window.location.href 跳转完成登录。
  * 页面常驻风险提示。
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import {
   Alert,
@@ -23,7 +25,12 @@ import {
 import { LoginOutlined, HomeOutlined, SafetyCertificateOutlined } from "@ant-design/icons";
 import { apiFetch } from "@/lib/api";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
-import { ROLE_LABELS, type LoginResponse, type Role } from "@/lib/types";
+import {
+  ROLE_LABELS,
+  type LoginResponse,
+  type Role,
+  type SystemInfo,
+} from "@/lib/types";
 
 const { Title, Paragraph, Text } = Typography;
 
@@ -40,6 +47,25 @@ export default function LoginPage() {
   const [profile, setProfile] = useState("admin");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // 默认 mock：dev 下零闪变（与阶段 6 逐像素一致）；取到非 mock 再切中性登录。
+  // 拿不到 /system/info 时维持现状 —— 后端不可达时登录链路本身也不可用。
+  const [authProvider, setAuthProvider] = useState("mock");
+
+  useEffect(() => {
+    let alive = true;
+    apiFetch<SystemInfo>("/v1/system/info")
+      .then((info) => {
+        if (alive && info?.auth_provider) {
+          setAuthProvider(info.auth_provider);
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const isMock = authProvider === "mock";
 
   const handleLogin = async () => {
     setSubmitting(true);
@@ -131,21 +157,32 @@ export default function LoginPage() {
             </Card>
           ) : (
             <>
-              <div>
-                <Paragraph style={{ marginBottom: 8 }}>
-                  <Text strong>开发环境一键进入：</Text>
-                  <Text type="secondary">
-                    当前使用 MockAuthProvider，无需账号密码，选择身份后直接进入平台。
-                  </Text>
-                </Paragraph>
-                <Select
-                  aria-label="选择 Mock 身份"
-                  style={{ width: "100%" }}
-                  value={profile}
-                  onChange={setProfile}
-                  options={PROFILE_OPTIONS}
-                />
-              </div>
+              {isMock ? (
+                <div>
+                  <Paragraph style={{ marginBottom: 8 }}>
+                    <Text strong>开发环境一键进入：</Text>
+                    <Text type="secondary">
+                      当前使用 MockAuthProvider，无需账号密码，选择身份后直接进入平台。
+                    </Text>
+                  </Paragraph>
+                  <Select
+                    aria-label="选择 Mock 身份"
+                    style={{ width: "100%" }}
+                    value={profile}
+                    onChange={setProfile}
+                    options={PROFILE_OPTIONS}
+                  />
+                </div>
+              ) : (
+                <div>
+                  <Paragraph style={{ marginBottom: 0 }}>
+                    <Text strong>统一身份认证登录：</Text>
+                    <Text type="secondary">
+                      将跳转至组织身份认证页面，完成登录后自动返回平台。
+                    </Text>
+                  </Paragraph>
+                </div>
+              )}
 
               {error ? (
                 <Alert type="error" showIcon message={error} />
@@ -159,7 +196,7 @@ export default function LoginPage() {
                 loading={submitting}
                 onClick={() => void handleLogin()}
               >
-                一键进入平台
+                {isMock ? "一键进入平台" : "登录"}
               </Button>
 
               <Divider plain style={{ margin: "8px 0" }}>
@@ -170,7 +207,9 @@ export default function LoginPage() {
               <Paragraph type="secondary" style={{ fontSize: 13, marginBottom: 0 }}>
                 会话由后端签发的 HttpOnly Cookie（qqlab_session）维护，
                 浏览器脚本不可读取；写操作通过双提交 Cookie（qqlab_csrf）进行 CSRF 校验。
-                正式环境将切换为 Casdoor OIDC 登录，前端无需改动。
+                {isMock
+                  ? "正式环境将切换为 Casdoor OIDC 登录，前端无需改动。"
+                  : "由 Casdoor OIDC 完成身份认证，平台会话由后端独立签发。"}
               </Paragraph>
               <Paragraph style={{ fontSize: 13, marginBottom: 0 }}>
                 <Link href="/legal/terms">用户协议</Link>
