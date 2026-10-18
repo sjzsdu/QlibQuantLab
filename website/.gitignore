@@ -1,0 +1,15 @@
+# Docusaurus
+node_modules/
+build/
+.docusaurus/
+.cache-loader/
+
+# 本地覆盖
+.env.local
+.env.*.local
+
+# 生成物（scripts/sync-legal.mjs 由 backend/src/qqlab/legal + 根 LICENSE 生成）
+legal/
+
+# Python（brand/verify_assets.py 的缓存）
+__pycache__/

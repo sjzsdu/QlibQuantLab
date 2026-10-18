@@ -1,0 +1,6 @@
+User-agent: *
+Allow: /
+
+# 站点地图由 @docusaurus/plugin-sitemap 在构建时生成（/sitemap.xml）。
+# 域名定稿后，把下面这行换成生产域名，并与 docusaurus.config.ts 的 SITE_URL 保持一致。
+Sitemap: https://qqlab.example.com/sitemap.xml

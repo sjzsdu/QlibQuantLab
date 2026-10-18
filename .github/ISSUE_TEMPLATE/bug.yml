@@ -1,0 +1,66 @@
+name: Bug report
+description: 报告一个可以复现的问题（后端 / 前端 / 文档 / 官网）
+labels: ['bug']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请先确认问题可以复现。安全相关的问题**不要**走公开 issue，请按 `SECURITY.md`（如有）或私下联系维护者。
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: 影响范围
+      options:
+        - backend（FastAPI / 任务 / 数据）
+        - frontend（页面 / 交互）
+        - website（官网 / 文档）
+        - qlib 链路（worker / qlib-server）
+        - 部署 / compose
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: 发生了什么
+      description: 实际行为，以及你期望的行为。
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      placeholder: |
+        1. docker compose up -d --build
+        2. 打开 http://localhost:3000/projects
+        3. 点击 …
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志 / request_id
+      description: |
+        平台统一响应信封里带 `request_id`，它同时出现在响应头 `X-Request-ID`、结构化日志与 `audit_logs`。
+        贴日志时请删掉密钥、Cookie 与真实研究内容。
+      render: text
+
+  - type: input
+    id: version
+    attributes:
+      label: 版本 / 提交
+      description: `git rev-parse --short HEAD` 或镜像标签。
+    validations:
+      required: true
+
+  - type: dropdown
+    id: deploy-mode
+    attributes:
+      label: 部署形态
+      options:
+        - 模式 A · docker compose
+        - 模式 B · 复用基础设施
+        - 本机零依赖（sqlite + memory）

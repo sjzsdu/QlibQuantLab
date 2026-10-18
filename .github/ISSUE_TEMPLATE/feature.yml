@@ -1,0 +1,37 @@
+name: Feature request
+description: 提一个能力 / 文档 / 官网的改进建议
+labels: ['enhancement']
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 你遇到的问题是
+      description: 描述场景，而不是直接给方案 —— 场景比方案更能说明问题。
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 你希望怎么解决
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: 影响范围
+      options:
+        - 研究资产（项目 / 数据 / 因子）
+        - 计算（模型 / 训练 / 回测 / 任务）
+        - 治理（多租户 / RBAC / 审计 / 合规）
+        - 文档与官网
+        - 部署与运维
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: compliance
+    attributes:
+      label: 合规确认
+      options:
+        - label: 这个需求不涉及收益率、胜率等效果承诺类表述
+          required: true

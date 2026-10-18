@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 安全问题
+    url: https://github.com/sjzsdu/QlibQuantLab/security/advisories/new
+    about: 多租户越权、认证绕过、凭据泄露等请走私密渠道，不要开公开 issue。
+  - name: 使用问题 / 部署排错
+    url: https://github.com/sjzsdu/QlibQuantLab/tree/main/website/docs
+    about: 先看文档：快速开始里有一张常见报错排查表。
