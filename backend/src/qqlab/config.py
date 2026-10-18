@@ -80,15 +80,23 @@ class Settings(BaseSettings):
     MOCK_ORG_NAME: str = "Dev Organization"
     MOCK_USER_ROLES: str = "admin,researcher"
 
-    # Casdoor（阶段 7；阶段 1-6 留空）
+    # Casdoor（阶段 7 实装；AUTH_PROVIDER=casdoor 时 CASDOOR_* 必填，启动校验）
+    #: OIDC issuer（浏览器可达地址，用于 authorize/logout 跳转与 iss 校验白名单①）
     CASDOOR_ISSUER: str = ""
+    #: 服务端可达地址（dev 下浏览器走宿主机映射端口、容器走 compose 服务名时拆分；
+    #: 生产留空 = 与 ISSUER 相同。token/discovery/JWKS 走此地址，进 iss 白名单②）
+    CASDOOR_INTERNAL_URL: str = ""
     CASDOOR_CLIENT_ID: str = ""
     CASDOOR_CLIENT_SECRET: str = ""
     CASDOOR_REDIRECT_URI: str = ""
     CASDOOR_SCOPES: str = "openid profile email"
+    #: Casdoor JWT 内嵌 user struct 的角色/组织字段名（默认格式零配置即可用）
     CASDOOR_ROLE_CLAIM: str = "roles"
-    CASDOOR_ORG_ID_CLAIM: str = "x-org-id"
+    CASDOOR_ORG_ID_CLAIM: str = "owner"
+    #: JSON 映射：Casdoor 角色名 → 平台角色（未知角色 fail-closed 拒绝登录）
     CASDOOR_ROLE_MAP: str = "{}"
+    #: JSON 映射：Casdoor 组织名 → 平台 org_id（缺省直通 claim 原值）
+    CASDOOR_ORG_MAP: str = "{}"
 
     # ------------------------------------------------------ Qlib 计算（worker）
     #: 计算后端：qlib（真数据，经 Qlib-Server）| stub（合成数据对照，零依赖）
@@ -103,6 +111,10 @@ class Settings(BaseSettings):
     QLIB_REGION: str = "cn"
     QLIB_WORKER_CONCURRENCY: int = 1
     QLIB_INIT_TIMEOUT_SECONDS: int = 60
+    #: R6-2：worker 启动时回收孤儿 running 任务的心跳阈值（分钟）。
+    #: **单副本前提**（dev/prod compose 的 worker 均为单服务无 replicas）：
+    #: 扩多副本前必须先改为「locked_by 存活消费者校验」，否则长任务可能双执行。
+    WORKER_STALE_JOB_MINUTES: int = 10
 
     # Qlib-Server 自身的硬依赖（不可省略，见 README「Qlib-Server 硬依赖」）
     QLIB_SERVER_REDIS_HOST: str = ""
@@ -154,6 +166,22 @@ class Settings(BaseSettings):
             raise ValueError(f"COMPUTE_BACKEND 必须是 qlib | stub，收到 {v!r}")
         return v
 
+    @field_validator("CASDOOR_ROLE_MAP", "CASDOOR_ORG_MAP")
+    @classmethod
+    def _json_str_map(cls, v: str) -> str:
+        """两个映射必须是 JSON 对象（str → str）——启动即报错，不等登录时炸。"""
+        import json
+
+        try:
+            data = json.loads(v or "{}")
+        except ValueError as exc:
+            raise ValueError(f"必须是合法 JSON 对象，收到 {v!r}") from exc
+        if not isinstance(data, dict) or not all(
+            isinstance(k, str) and isinstance(val, str) for k, val in data.items()
+        ):
+            raise ValueError(f"必须是 {str!r} → {str!r} 形式的 JSON 对象，收到 {v!r}")
+        return v
+
     @model_validator(mode="after")
     def _validate(self) -> Settings:
         if self.APP_ENV == "production":
@@ -170,6 +198,16 @@ class Settings(BaseSettings):
                     "Qlib-Server 强依赖 Redis 与 RabbitMQ，QLIB_SERVER_REDIS_HOST / "
                     "QLIB_SERVER_QUEUE_HOST 必须配置（无法通过接口替换）"
                 )
+        if self.AUTH_PROVIDER == "casdoor":
+            # 生产与开发都要求：切到 casdoor 就必须给全 OIDC 四要素（启动即失败，
+            # 绝不带着空 issuer 起来后在第一个登录请求才炸）
+            missing = [
+                name
+                for name in ("CASDOOR_ISSUER", "CASDOOR_CLIENT_ID", "CASDOOR_CLIENT_SECRET", "CASDOOR_REDIRECT_URI")
+                if not getattr(self, name).strip()
+            ]
+            if missing:
+                raise ValueError(f"AUTH_PROVIDER=casdoor 但缺少必填配置：{', '.join(missing)}")
         if self.STORAGE_BACKEND in ("s3", "minio") and (
             not self.STORAGE_S3_ENDPOINT or not self.STORAGE_S3_ACCESS_KEY
         ):
@@ -184,6 +222,28 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.APP_ENV == "production"
+
+    @property
+    def casdoor_role_map(self) -> dict[str, str]:
+        import json
+
+        return json.loads(self.CASDOOR_ROLE_MAP or "{}")
+
+    @property
+    def casdoor_org_map(self) -> dict[str, str]:
+        import json
+
+        return json.loads(self.CASDOOR_ORG_MAP or "{}")
+
+    @property
+    def casdoor_issuers(self) -> tuple[str, ...]:
+        """iss 校验白名单：浏览器侧 issuer 与服务端侧地址（Casdoor 的 iss 按请求
+        Host 派生，dev 拆分双地址时两者都可能出现在 id_token 里 —— casdoor#1622）。"""
+        out = [self.CASDOOR_ISSUER.rstrip("/")]
+        internal = self.CASDOOR_INTERNAL_URL.strip().rstrip("/")
+        if internal and internal not in out:
+            out.append(internal)
+        return tuple(out)
 
     @property
     def qlib_ws_host_port(self) -> tuple[str, int]:

@@ -19,6 +19,7 @@ from qqlab.core.errors import ValidationAppError
 from qqlab.core.logging import get_logger, setup_logging
 from qqlab.models import JobKind
 from qqlab.ports.message_queue import JOB_QUEUE, Message
+from qqlab.repositories.job import recover_stale_running_jobs
 from qqlab.worker.handlers import (
     make_backtest_handler,
     make_dataset_import_handler,
@@ -95,6 +96,16 @@ class Worker:
 
             ok, detail = probe_qlib_server(self.settings)
             logger.info("qlib_server_probe", extra={"ok": ok, "detail": detail})
+        # R6-2：消费前先回收孤儿 running 任务（单副本前提见 recover_stale_running_jobs 注释）
+        try:
+            async with self.container.database.session() as session:
+                stats = await recover_stale_running_jobs(
+                    session, stale_minutes=self.settings.WORKER_STALE_JOB_MINUTES
+                )
+            if stats["requeued"] or stats["failed"]:
+                logger.warning("stale_running_recovered", extra=stats)
+        except Exception:  # noqa: BLE001 - 回收失败不阻断消费（只是孤儿任务暂留 running）
+            logger.exception("stale_running_recover_failed")
         await self.container.queue.declare(self.queue_name)
         await self.container.queue.consume(
             self.queue_name,

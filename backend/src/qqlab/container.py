@@ -93,7 +93,7 @@ class Container:
             )
 
         # 5. 认证（未实现的实现 → 启动即失败，绝不静默降级成 mock）
-        auth = cls._build_auth(settings)
+        auth = cls._build_auth(settings, cache)
 
         # 6. 审计
         audit = DbAuditWriter(database)
@@ -109,11 +109,11 @@ class Container:
         )
 
     @staticmethod
-    def _build_auth(settings: Settings) -> AuthProvider:
+    def _build_auth(settings: Settings, cache: CacheProvider) -> AuthProvider:
         if settings.AUTH_PROVIDER == "mock":
             return MockAuthProvider(settings)
         if settings.AUTH_PROVIDER == "casdoor":
-            provider = CasdoorAuthProvider(settings)
+            provider = CasdoorAuthProvider(settings, cache=cache)
             if not getattr(provider, "IMPLEMENTED", False):
                 raise ConfigError(
                     "AUTH_PROVIDER=casdoor 但 CasdoorAuthProvider 尚未实现（阶段 7 交付）。"

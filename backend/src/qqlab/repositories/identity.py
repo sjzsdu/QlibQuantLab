@@ -24,10 +24,18 @@ class IdentityRepository:
         stmt = select(Organization).where(Organization.id == stable_uuid(org_id))
         return (await self.session.execute(stmt)).scalars().first()
 
-    async def ensure_org(self, org_id: str, *, slug: str, name: str) -> Organization:
+    async def ensure_org(
+        self, org_id: str, *, slug: str, name: str, rename_existing: bool = True
+    ) -> Organization:
+        """确保组织存在。
+
+        ``rename_existing=False``（阶段 7）：外部 IdP 不携带组织显示名时（如 Casdoor
+        JWT 只有 owner 名），回落名 ``Org {id[:8]}`` 绝不能覆盖平台里已有的组织名 ——
+        否则用户经 ORG_MAP 映射进既有组织的首次登录就会把组织改名。
+        """
         existing = await self.get_org(org_id)
         if existing is not None:
-            if existing.name != name:
+            if rename_existing and existing.name != name:
                 existing.name = name
                 await self.session.flush()
             return existing

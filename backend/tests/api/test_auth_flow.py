@@ -105,6 +105,19 @@ def test_logout_clears_session(client: TestClient) -> None:
     assert client.get("/api/v1/me").status_code == 401
 
 
+def test_callback_with_oidc_error_returns_401(client: TestClient) -> None:
+    """OIDC 错误重定向（用户拒绝授权 / Casdoor 登录失败）→ 401 且带清晰原因。"""
+    response = client.get(
+        "/api/v1/auth/callback",
+        params={"error": "access_denied", "error_description": "User cancelled"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 401
+    body = response.json()
+    assert body["code"] == 1001
+    assert "access_denied" in body["message"] or "User cancelled" in body["message"]
+
+
 @pytest.mark.parametrize("profile", ["admin", "researcher", "viewer", "auditor"])
 def test_every_profile_can_read_me(client: TestClient, profile: str) -> None:
     login(client, profile)

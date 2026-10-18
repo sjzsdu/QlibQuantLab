@@ -9,7 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select, update
 
@@ -228,6 +228,59 @@ class JobRepository(BaseRepository):
             )
         )
         await self.session.flush()
+
+
+async def recover_stale_running_jobs(session, *, stale_minutes: int = 10) -> dict[str, int]:
+    """R6-2：worker 启动时把孤儿 ``running`` 任务收敛回 ``queued``/``failed``。
+
+    背景：worker 被 OOM/kill -9/容器重建时，已 ``mark_running`` 的任务不会走异常
+    分支落终态，会永远卡在 ``running``，前端轮询与 ``attempts`` 都不再推进。
+
+    判据：``status=running`` 且 ``heartbeat_at`` 早于 ``now - stale_minutes``
+    （``heartbeat_at IS NULL`` 视为同样陈旧，覆盖 mark_running 后、首个 progress 前崩溃）。
+    收敛：``attempts < max_attempts`` → 回 ``queued``（清 locked_by，重新可被消费）；
+    否则 → ``failed``（写明原因）。
+
+    **单副本前提**：本函数假定「原消费者已死」——dev/prod compose 的 worker 都是
+    单服务、无 replicas，启动时旧进程必已退出，故安全。**扩多副本前必须改为**
+    「校验 ``locked_by`` 不属于任何存活消费者（心跳表）」，否则 worker B 重启会把
+    worker A 正在跑的长任务（如无 progress 检查点的 LightGBM 训练 >10min）重新入队
+    导致双执行。阈值可配（``WORKER_STALE_JOB_MINUTES``），且应保证「检查点间隔 < 阈值/2」。
+    """
+    cutoff = datetime.now(tz=UTC) - timedelta(minutes=max(1, stale_minutes))
+    stale = (Job.status == JobStatus.RUNNING) & (
+        (Job.heartbeat_at.is_(None)) | (Job.heartbeat_at < cutoff)
+    )
+    # 可重试的回 queued；已耗尽 attempts 的落 failed
+    requeued = (
+        await session.execute(
+            update(Job)
+            .where(stale, Job.attempts < Job.max_attempts)
+            .values(
+                status=JobStatus.QUEUED,
+                locked_by=None,
+                heartbeat_at=None,
+                error="worker 重启回收：上一消费者已退出，任务重新排队",
+            )
+            .execution_options(synchronize_session=False)
+        )
+    ).rowcount
+    failed = (
+        await session.execute(
+            update(Job)
+            .where(stale, Job.attempts >= Job.max_attempts)
+            .values(
+                status=JobStatus.FAILED,
+                locked_by=None,
+                heartbeat_at=None,
+                error="worker 重启回收：上一消费者已退出且重试次数耗尽",
+                finished_at=datetime.now(tz=UTC),
+            )
+            .execution_options(synchronize_session=False)
+        )
+    ).rowcount
+    await session.commit()
+    return {"requeued": int(requeued or 0), "failed": int(failed or 0)}
 
 
 class BacktestRepository(BaseRepository):

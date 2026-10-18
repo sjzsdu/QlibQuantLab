@@ -1,0 +1,124 @@
+{
+  "_comment": "Casdoor dev/冒烟种子（阶段 7）。casdoor 启动时幂等应用（initDataNewOnly=false：新建+更新）。仅供开发：生产用 casbin/casdoor + 外部 PostgreSQL + 手工/脚本建应用，见 docs/stage7/05-casdoor-deployment.md。",
+  "organizations": [
+    {
+      "owner": "admin",
+      "name": "qqlab",
+      "displayName": "QlibQuantLab Dev",
+      "websiteUrl": "",
+      "favicon": "",
+      "passwordType": "plain",
+      "passwordOptions": ["Length"],
+      "cert": "cert-built-in",
+      "mfaItems": [],
+      "accountItems": [],
+      "lang": "en",
+      "enableSoftDeletion": false,
+      "isProfilePublic": false,
+      "hiddenUserItems": []
+    }
+  ],
+  "applications": [
+    {
+      "owner": "admin",
+      "name": "app-qqlab",
+      "displayName": "QlibQuantLab",
+      "logo": "https://casbin.org/img/casbin.svg",
+      "homepageUrl": "",
+      "description": "QlibQuantLab dev OIDC application（阶段 7）",
+      "organization": "qqlab",
+      "cert": "cert-built-in",
+      "enablePassword": true,
+      "signinMethods": [
+        { "name": "Password", "displayName": "Password", "rule": "All" }
+      ],
+      "clientId": "qqlab-dev-client",
+      "clientSecret": "qqlab-dev-secret-0123456789abcdef",
+      "grantTypes": ["authorization_code", "refresh_token", "password"],
+      "redirectUris": [
+        "http://localhost:3000/api/v1/auth/callback",
+        "http://127.0.0.1:3000/api/v1/auth/callback",
+        "http://localhost:3000/login",
+        "http://127.0.0.1:3000/login"
+      ],
+      "tokenFormat": "JWT",
+      "tokenSigningMethod": "RSA256",
+      "tokenFields": ["owner", "name", "email", "roles", "displayname"],
+      "expireInHours": 24,
+      "refreshExpireInHours": 168,
+      "signUpUrl": "",
+      "signinUrl": "",
+      "enableSignUp": false,
+      "enableSigninSession": true,
+      "forgotPasswordUrl": "",
+      "resetPasswordUrl": "",
+      "passwordOptions": ["Length"],
+      "passwordExpireDays": 0
+    }
+  ],
+  "roles": [
+    { "owner": "qqlab", "name": "admin", "displayName": "管理员", "users": ["qqlab/smoke-admin"], "isEnabled": true },
+    { "owner": "qqlab", "name": "researcher", "displayName": "研究员", "users": [], "isEnabled": true },
+    { "owner": "qqlab", "name": "viewer", "displayName": "访客", "users": ["qqlab/smoke-viewer"], "isEnabled": true },
+    { "owner": "qqlab", "name": "auditor", "displayName": "审计员", "users": [], "isEnabled": true },
+    { "owner": "qqlab", "name": "operator", "displayName": "未知角色（冒烟负例：平台 ROLE 没有此角色 → fail-closed）", "users": ["qqlab/smoke-unknown"], "isEnabled": true }
+  ],
+  "users": [
+    {
+      "owner": "built-in",
+      "name": "admin",
+      "password": "Casdoor-Dev-Admin-123",
+      "displayName": "casdoor admin",
+      "isAdmin": true,
+      "signupApplication": "app-built-in"
+    },
+    {
+      "owner": "qqlab",
+      "name": "smoke-admin",
+      "password": "Smoke-Dev-Admin-1234",
+      "email": "smoke-admin@qlibquantlab.local",
+      "displayName": "Smoke Admin",
+      "isAdmin": false,
+      "signupApplication": "app-qqlab",
+      "roles": [
+        { "owner": "qqlab", "name": "admin" }
+      ]
+    },
+    {
+      "owner": "qqlab",
+      "name": "smoke-viewer",
+      "password": "Smoke-Dev-Viewer-1234",
+      "email": "smoke-viewer@qlibquantlab.local",
+      "displayName": "Smoke Viewer",
+      "isAdmin": false,
+      "signupApplication": "app-qqlab",
+      "roles": [
+        { "owner": "qqlab", "name": "viewer" }
+      ]
+    },
+    {
+      "_comment": "无角色 → 回调时 fail-closed 401（冒烟负例）",
+      "owner": "qqlab",
+      "name": "smoke-norole",
+      "password": "Smoke-Dev-NoRole-1234",
+      "email": "smoke-norole@qlibquantlab.local",
+      "displayName": "Smoke NoRole",
+      "isAdmin": false,
+      "signupApplication": "app-qqlab",
+      "roles": []
+    },
+    {
+      "_comment": "角色名平台不存在（operator）→ Role.parse_all 拒绝 → fail-closed 401（冒烟负例）",
+      "owner": "qqlab",
+      "name": "smoke-unknown",
+      "password": "Smoke-Dev-Unknown-1234",
+      "email": "smoke-unknown@qlibquantlab.local",
+      "displayName": "Smoke UnknownRole",
+      "isAdmin": false,
+      "signupApplication": "app-qqlab",
+      "roles": [
+        { "owner": "qqlab", "name": "operator" }
+      ]
+    }
+  ]
+}

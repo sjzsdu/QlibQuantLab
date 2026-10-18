@@ -1,13 +1,14 @@
-# docker-compose.yml —— 模式 A：一键起全套依赖（不含 Casdoor、不含 Traefik）
+# docker-compose.yml —— 模式 A：一键起全套依赖（不含 Traefik；Casdoor 走 --profile casdoor）
 #
 #   cp .env.example .env
 #   docker compose up -d --build      # 默认 8 个服务：frontend backend worker migrate postgres redis rabbitmq
 #
 # 应用层完全不感知反向代理：本文件里没有 Traefik，也不引用任何外部网络。
-# 两个可选 profile：
-#   --profile minio  对象存储 MinIO（当前环境拉不到镜像，默认用 STORAGE_BACKEND=local 兜底）
-#   --profile qlib   Qlib-Server + rabbitmq-init（vhost 授权）+ qlib-bootstrap（数据导入）
-#                    （决策 #1：qlib 链路保持 opt-in，绝不进默认 up）
+# 三个可选 profile：
+#   --profile minio   对象存储 MinIO（当前环境拉不到镜像，默认用 STORAGE_BACKEND=local 兜底）
+#   --profile qlib    Qlib-Server + rabbitmq-init（vhost 授权）+ qlib-bootstrap（数据导入）
+#                     （决策 #1：qlib 链路保持 opt-in，绝不进默认 up）
+#   --profile casdoor Casdoor IdP（阶段 7；AUTH_PROVIDER=casdoor 时才需要，默认 mock 不起）
 
 name: qqlab
 
@@ -310,6 +311,46 @@ services:
     # bucket 由 backend 的 S3StorageProvider.ping() 惰性创建（head_bucket → create_bucket），
     # 因此不再需要独立的 minio/mc 初始化容器（该镜像已从 Docker Hub 移除）。
 
+  # ---------------------------------------------------------------- Casdoor（阶段 7 · OIDC IdP）
+  # mock 认证（阶段 1-6 默认）不需要 IdP；切 AUTH_PROVIDER=casdoor 时启动：
+  #   docker compose --profile casdoor up -d casdoor
+  # all-in-one = 单二进制 + 内嵌 SQLite（官方定位 quick try-out）→ 仅限开发/冒烟，
+  # 数据落 casdoor_data 卷（重启持久）；卷清空重建时启动自动重放挂载的 init_data.json（幂等 create+update）。
+  # 生产用 casbin/casdoor + 外部 PostgreSQL，见 docs/stage7/05-casdoor-deployment.md。
+  # 镜像必须按 digest 拉取（镜像源 tag + --platform 会被本地单架构缓存骗架构，阶段 6/7 实测）：
+  #   curl -s "https://docker.1ms.run/openapi/v1/auth/token?service=docker.1ms.run&scope=repository:casbin/casdoor-all-in-one:pull"
+  #   → Bearer 后 GET /v2/casbin/casdoor-all-in-one/manifests/latest 取目标架构 digest
+  #   → docker pull docker.1ms.run/casbin/casdoor-all-in-one@sha256:<digest> && docker tag … casbin/casdoor-all-in-one:latest
+  # 当前栈架构 digest（2026-10-18 探测）：amd64 sha256:ba602519188c5f5c31e77efa5b7b53dcc758bb3625122dd6e33ac5ef25c4772e
+  casdoor:
+    profiles: ["casdoor"]
+    image: casbin/casdoor-all-in-one:latest
+    platform: ${CASDOOR_PLATFORM:-linux/amd64} # 与本栈一致；Apple Silicon 走 Rosetta
+    ports: ["${HOST_PORT_CASDOOR:-8001}:8000"]
+    networks: [qqlab]
+    restart: unless-stopped
+    # 官方镜像内置 sqlite + bash/curl；entrypoint 脚本支持 env 覆盖数据源
+    environment:
+      driverName: sqlite
+      dataSourceName: "file:/data/casdoor.db?cache=shared"
+    volumes:
+      - casdoor_data:/data
+      # 声明式种子（幂等，initDataNewOnly=false：新建+更新）：组织/应用/角色/测试用户
+      - ./deploy/casdoor/init_data.json:/init_data.json:ro
+    healthcheck:
+      # 镜像内有 curl（无 wget）；discovery 是本栈真正依赖的活性信号
+      test:
+        [
+          "CMD",
+          "curl",
+          "-fsS",
+          "http://127.0.0.1:8000/.well-known/openid-configuration",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+      start_period: 5s
+
 networks:
   qqlab: {driver: bridge}
 
@@ -321,6 +362,7 @@ volumes:
   qlib_data:
   experiments:
   objects_data:
+  casdoor_data: # Casdoor dev sqlite（阶段 7，仅 --profile casdoor）
   backend_venv: # API 侧（Python 3.12）
   worker_venv: # worker 侧（Python 3.11 + qlib）—— 与 API 分开，避免解释器串味
   frontend_node_modules:

@@ -281,7 +281,8 @@ class StubComputeProvider:
         lines = ["date,instrument,value"]
         for (instrument, date), value in sorted(factor_vals.items()):
             lines.append(f"{date},{instrument},{float(value):.6f}")
-        values_csv = gzip.compress(("\n".join(lines) + "\n").encode())
+        # mtime=0：与 qlib_compute 同约定 —— 相同输入 → 字节级一致（deterministic 测试依赖）
+        values_csv = gzip.compress(("\n".join(lines) + "\n").encode(), mtime=0)
 
         all_days = sorted({b.date for bars in prices.values() for b in bars})
         data_range = {

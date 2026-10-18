@@ -1,6 +1,9 @@
 # 注：不写 `# syntax=` 指令 —— 该指令需联网拉取 docker/dockerfile:1 前端镜像，
-# 构建机访问 registry-1.docker.io 失败（EOF）时整个构建不可用；本文件只用基础语法，
-# 内置前端即可。若将来用到 heredoc/--mount 再恢复该指令。
+# 构建机访问 registry-1.docker.io 失败（EOF）时整个构建不可用。
+# 用到的 `RUN --mount=type=cache`（uv 轮子缓存挂载）由 BuildKit 内置前端直接支持，
+# 无需拉取前端镜像；构建需 BuildKit（compose v2 默认驱动）。
+# 缓存挂载的意义：uv sync 失败重试时已下载的轮子留在守护进程缓存里增量续传，
+# PyPI 直连劣化的构建机（阶段 7 实测 ~37KB/s + 偶发轮子损坏）经多次重试必收敛。
 # 多阶段：
 #   base    —— 基础镜像与 uv（API 侧，Python 3.12）
 #   builder —— 依赖已安装（开发 compose 用 target: dev + bind mount + venv 卷）
@@ -23,9 +26,9 @@ WORKDIR /app
 FROM base AS builder
 # 先只拷清单，命中层缓存
 COPY pyproject.toml uv.lock .python-version ./
-RUN uv sync --frozen --no-dev --no-install-project
+RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen --no-dev --no-install-project
 COPY . .
-RUN uv sync --frozen --no-dev
+RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen --no-dev
 ENV VIRTUAL_ENV=/app/.venv \
     PATH="/app/.venv/bin:$PATH"
 
@@ -67,9 +70,9 @@ WORKDIR /app
 
 FROM worker-base AS worker-builder
 COPY pyproject.toml uv.lock .python-version ./
-RUN uv sync --frozen --no-dev --extra qlib --no-install-project
+RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen --no-dev --extra qlib --no-install-project
 COPY . .
-RUN uv sync --frozen --no-dev --extra qlib
+RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen --no-dev --extra qlib
 ENV VIRTUAL_ENV=/app/.venv \
     PATH="/app/.venv/bin:$PATH"
 

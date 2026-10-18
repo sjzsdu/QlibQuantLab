@@ -14,8 +14,9 @@ from qqlab.api.deps import (
     get_settings,
     success,
 )
-from qqlab.core.errors import NotFoundError
+from qqlab.core.errors import NotFoundError, UnauthorizedError
 from qqlab.core.logging import get_logger
+from qqlab.ports.audit import AuditAction
 from qqlab.schemas import CurrentUserOut, LoginStartOut, LogoutOut, MockEnterIn
 from qqlab.services import AuthService, safe_redirect
 
@@ -95,10 +96,28 @@ async def auth_callback(
     request: Request,
     code: str | None = None,
     state: str | None = None,
+    error: str | None = None,
+    error_description: str | None = None,
     service: AuthService = Depends(get_auth_service),
+    ctx=Depends(get_audit_ctx),
 ) -> Response:
+    # Casdoor 在用户拒绝授权 / 登录失败时会带 error= 回跳（OIDC 错误重定向）
+    if error:
+        logger.warning(
+            "oidc_callback_error",
+            extra={"error": error, "error_description": error_description},
+        )
+        await request.app.state.container.audit.record(
+            action=AuditAction.AUTH_LOGIN_FAILED,
+            resource_type="auth",
+            resource_id=None,
+            outcome="failure",
+            detail={"reason": "oidc_error", "error": error},
+            ip=ctx.ip,
+        )
+        raise UnauthorizedError(f"登录失败：{error_description or error}")
     settings = get_settings(request)
-    bundle = await service.handle_callback(code or "", state or "")
+    bundle = await service.handle_callback(code or "", state or "", ip=ctx.ip)
     response = RedirectResponse(safe_redirect(bundle.redirect_to), status_code=302)
     set_session_cookies(response, settings, bundle)
     return response
@@ -114,7 +133,12 @@ async def logout(
     ctx=Depends(get_audit_ctx),
 ) -> dict:
     settings = get_settings(request)
+    container = request.app.state.container
     await service.logout(user, ctx)
     clear_session_cookies(response, settings)
-    redirect_to = "/login?logged_out=1" + (f"&next={safe_redirect(next)}" if next else "")
-    return success(request, LogoutOut(redirect_to=redirect_to).model_dump(), message="已登出")
+    # mock → 站内 /login?logged_out=1；casdoor → Casdoor /api/logout（RP-initiated logout）
+    return success(
+        request,
+        LogoutOut(redirect_to=container.auth.get_logout_url(safe_redirect(next))).model_dump(),
+        message="已登出",
+    )

@@ -71,7 +71,9 @@ class AuthService:
         return raw.decode()
 
     # --------------------------------------------------- 回调 / 一键进入
-    async def handle_callback(self, code: str, state: str) -> SessionBundle:
+    async def handle_callback(
+        self, code: str, state: str, *, ip: str | None = None
+    ) -> SessionBundle:
         """OIDC 回调入口：state 必须由本平台签发且未使用过。"""
         redirect_to = await self._consume_state(state)
         if state and redirect_to is None:
@@ -81,6 +83,7 @@ class AuthService:
                 resource_id=None,
                 outcome="failure",
                 detail={"reason": "invalid_state"},
+                ip=ip,
             )
             raise ValidationAppError("登录 state 无效或已过期，请重新发起登录")
         user = await self._fetch_identity(code, state)
@@ -128,7 +131,11 @@ class AuthService:
         )
         async with self._database.session() as session:
             identity = IdentityRepository(session)
-            await identity.ensure_org(user.org_id, slug=slug, name=name)
+            # org_name 为空 = 外部 IdP 未携带组织显示名（Casdoor JWT 只有 owner 名）：
+            # 回落名只用于新建，绝不覆盖既有组织名（防止 ORG_MAP 映射进既有组织时被改名）
+            await identity.ensure_org(
+                user.org_id, slug=slug, name=name, rename_existing=user.org_name is not None
+            )
             await identity.upsert_user(
                 user_id=user.user_id,
                 username=user.username,

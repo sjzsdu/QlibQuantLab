@@ -398,7 +398,8 @@ class QlibComputeProvider:
         for instrument, date, value in melted.rename("value").reset_index().itertuples(index=False):
             day = date.date().isoformat() if hasattr(date, "date") else str(date)
             lines.append(f"{day},{instrument},{float(value):.6f}")
-        values_csv = gzip.compress(("\n".join(lines) + "\n").encode())
+        # mtime=0：gzip 头不嵌时间戳 —— 相同因子值 → 字节级一致（可复现/可比对）
+        values_csv = gzip.compress(("\n".join(lines) + "\n").encode(), mtime=0)
         return metrics, ic_csv, values_csv, truncated
 
     async def compute_factor(
