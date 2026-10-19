@@ -133,6 +133,50 @@ def require_roles(*roles: Role) -> Callable[..., Awaitable[CurrentUser]]:
     return _guard
 
 
+# ------------------------------------------- 平台管理员（阶段 8 · D8-4）
+def platform_admin_users(settings) -> frozenset[str]:  # noqa: ANN001 - Settings
+    """PLATFORM_ADMIN_USERS 解析：逗号/空白分隔，去空。"""
+    return frozenset(
+        entry.strip()
+        for entry in settings.PLATFORM_ADMIN_USERS.replace(",", " ").split()
+        if entry.strip()
+    )
+
+
+def is_platform_admin(user: CurrentUser, settings) -> bool:  # noqa: ANN001 - Settings
+    """平台管理员 = env 白名单（与组织内 RBAC 正交）。
+
+    - mock：白名单留空 = 回落 MOCK_USER_ID / MOCK_USER_USERNAME（开发便利）；
+    - casdoor：白名单留空 = 无人（fail-closed，不给默认跨租户面）。
+    条目同时匹配 username 与 user_id（mock 身份两值不同，casdoor 用户名即条目）。
+    """
+    entries = platform_admin_users(settings)
+    if not entries and settings.AUTH_PROVIDER == "mock":
+        entries = frozenset({settings.MOCK_USER_ID, settings.MOCK_USER_USERNAME})
+    return bool(entries) and (user.username in entries or user.user_id in entries)
+
+
+async def require_platform_admin(
+    request: Request,
+    user: CurrentUser = Depends(get_current_user),
+) -> CurrentUser:
+    """平台端点守卫：白名单成员才放行，否则 403（身份不泄露给非平台管理员）。"""
+    settings = get_settings(request)
+    if not is_platform_admin(user, settings):
+        logger.warning(
+            "platform_admin_denied",
+            extra={"user_id": user.user_id, "username": user.username},
+        )
+        from qqlab.core.errors import ForbiddenError
+
+        raise ForbiddenError("需要平台管理员授权（PLATFORM_ADMIN_USERS）")
+    return user
+
+
+# 供架构测试静态扫描（D6-2）：按「已守卫」计（权限语义在 env 白名单，非 RBAC 表）
+require_platform_admin.__qqlab_roles__ = ("platform_admin",)  # type: ignore[attr-defined]
+
+
 def permissions_response(user: CurrentUser = Depends(get_current_user)) -> list[str]:
     return permissions_for(user.roles)
 

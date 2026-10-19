@@ -115,6 +115,9 @@ class Settings(BaseSettings):
     #: **单副本前提**（dev/prod compose 的 worker 均为单服务无 replicas）：
     #: 扩多副本前必须先改为「locked_by 存活消费者校验」，否则长任务可能双执行。
     WORKER_STALE_JOB_MINUTES: int = 10
+    #: 心跳写入间隔（秒）：写 CacheProvider，scrape 侧 3 倍间隔未见新心跳即判 down
+    #: （阶段 8 · B 项；同样受单副本前提约束）
+    WORKER_HEARTBEAT_INTERVAL_SECONDS: int = 10
 
     # Qlib-Server 自身的硬依赖（不可省略，见 README「Qlib-Server 硬依赖」）
     QLIB_SERVER_REDIS_HOST: str = ""
@@ -133,6 +136,23 @@ class Settings(BaseSettings):
     RATE_LIMIT_WRITE_PER_MIN: int = 120
     RATE_LIMIT_READ_PER_MIN: int = 600
     AUDIT_RETENTION_DAYS: int = 365
+
+    # --------------------------------------------------- 可观测性（阶段 8 · B 项）
+    #: /api/v1/metrics 是否暴露（false = 直接 404）
+    METRICS_ENABLED: bool = True
+    #: 生产必填才暴露：空 = fail-closed 404（不给探测面）；非空 = 要求
+    #: ``Authorization: Bearer <token>`` 或 ``X-Metrics-Token``；dev/test 免鉴权
+    METRICS_TOKEN: str = ""
+    #: 队列指标统计窗口（小时）：完成时长/失败率按此窗口现查 jobs 表
+    METRICS_QUEUE_WINDOW_HOURS: int = 24
+
+    # --------------------------------------------- 平台治理（阶段 8 · C 项）
+    #: 平台管理员白名单（逗号/空白分隔，D8-4）：跨租户平台端点 /admin/platform-audit
+    #: 的唯一授权面 —— 与组织内 RBAC 角色正交。mock 留空 = 回落 MOCK_USER_ID/
+    #: MOCK_USER_USERNAME（开发便利）；casdoor 留空 = 无人（fail-closed）
+    PLATFORM_ADMIN_USERS: str = ""
+    #: 平台审计保留期（天，D8-5）：写入时节流剪枝（24h 至多一次，见 PlatformAuditTrail）
+    PLATFORM_AUDIT_RETENTION_DAYS: int = 365
 
     # ------------------------------------------------------------ 校验
     @field_validator("APP_JWT_SECRET")

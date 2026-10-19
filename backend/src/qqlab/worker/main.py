@@ -8,6 +8,7 @@ API 进程永远不 import qlib —— 本模块只在 worker 容器执行。
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -17,6 +18,7 @@ from qqlab.config import Settings, load_settings
 from qqlab.container import Container
 from qqlab.core.errors import ValidationAppError
 from qqlab.core.logging import get_logger, setup_logging
+from qqlab.core.worker_heartbeat import RECYCLED_KEY, write_heartbeat
 from qqlab.models import JobKind
 from qqlab.ports.message_queue import JOB_QUEUE, Message
 from qqlab.repositories.job import recover_stale_running_jobs
@@ -104,15 +106,38 @@ class Worker:
                 )
             if stats["requeued"] or stats["failed"]:
                 logger.warning("stale_running_recovered", extra=stats)
+                await self._record_recycled(stats["requeued"] + stats["failed"])
         except Exception:  # noqa: BLE001 - 回收失败不阻断消费（只是孤儿任务暂留 running）
             logger.exception("stale_running_recover_failed")
-        await self.container.queue.declare(self.queue_name)
-        await self.container.queue.consume(
-            self.queue_name,
-            self.dispatch,
-            prefetch=self.settings.MQ_PREFETCH,
-            concurrency=concurrency,
-        )
+        # 心跳（阶段 8 · B 项）：先于阻塞的 consume 启动，/metrics 侧据此判 up/down
+        heartbeat = asyncio.create_task(self._heartbeat_loop())
+        try:
+            await self.container.queue.declare(self.queue_name)
+            await self.container.queue.consume(
+                self.queue_name,
+                self.dispatch,
+                prefetch=self.settings.MQ_PREFETCH,
+                concurrency=concurrency,
+            )
+        finally:
+            heartbeat.cancel()
+            with contextlib.suppress(asyncio.CancelledError):  # pragma: no cover - 正常取消路径
+                await heartbeat
+
+    async def _record_recycled(self, count: int) -> None:
+        """回收计数（阶段 8 · B 项）：port 只有 +1 incr，N 通常为 0/1。"""
+        for _ in range(count):
+            await self.container.cache.incr(RECYCLED_KEY)
+
+    async def _heartbeat_loop(self) -> None:
+        """周期写心跳到 CacheProvider（阶段 8 · B 项）：失败只告警不退出。"""
+        interval = max(1, self.settings.WORKER_HEARTBEAT_INTERVAL_SECONDS)
+        while True:
+            try:
+                await write_heartbeat(self.container.cache, interval=interval)
+            except Exception:  # noqa: BLE001 - 缓存抖动不该打断消费
+                logger.warning("worker_heartbeat_write_failed")
+            await asyncio.sleep(interval)
 
 
 def build_worker(settings: Settings | None = None) -> Worker:

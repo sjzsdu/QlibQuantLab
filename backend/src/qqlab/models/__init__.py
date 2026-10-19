@@ -17,7 +17,7 @@ from qqlab.models.study import (
 from qqlab.models.study import (
     Visibility as StudyVisibility,
 )
-from qqlab.models.system import AuditLog, SystemConfig
+from qqlab.models.system import AuditLog, PlatformAuditEvent, SystemConfig
 
 #: 含 org_id 的业务表 —— tests/architecture/test_tenant_columns.py 用它做全量断言
 TENANT_MODELS: tuple[type, ...] = (
@@ -39,8 +39,8 @@ TENANT_MODELS: tuple[type, ...] = (
     OrgMember,
 )
 
-#: 不含 org_id 的表（全局身份）
-NON_TENANT_MODELS: tuple[type, ...] = (Organization, User)
+#: 不含 org_id 的表（全局身份 + 平台审计：跨租户视图刻意不挂租户列，D8-5）
+NON_TENANT_MODELS: tuple[type, ...] = (Organization, User, PlatformAuditEvent)
 
 ALL_MODELS: tuple[type, ...] = TENANT_MODELS + NON_TENANT_MODELS
 
@@ -63,6 +63,7 @@ __all__ = [
     "NON_TENANT_MODELS",
     "OrgMember",
     "Organization",
+    "PlatformAuditEvent",
     "Project",
     "ProjectMember",
     "ProjectVisibility",

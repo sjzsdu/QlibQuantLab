@@ -1,0 +1,57 @@
+# docker-compose.rehearsal-traefik.yml —— R9 演练：真 Traefik 反代 Qlib WebSocket
+# （阶段 8 · E 项，D8-9）。与开发栈合并使用，**不改 .env**：
+#
+#   docker compose -f docker-compose.yml \
+#     -f deploy/rehearsal/docker-compose.rehearsal-traefik.yml \
+#     --profile qlib up -d traefik
+#
+# 验证链（表 A，回写 docs/stage7/03 §5.3）：
+#   ① curl -s http://127.0.0.1:8082/api/overview | head -1        # dashboard 活
+#   ② curl -s 'http://127.0.0.1:9711/socket.io/?EIO=4&transport=polling'  # 经 Traefik 握手
+#   ③ scripts/qlib_connectivity_smoke.py ws://localhost:9711      # 真 WS 穿透（upgrade 全链路）
+#   ④ curl -s http://127.0.0.1:8081/api/v1/health/live            # HTTP 前门 → backend
+#
+# Traefik 镜像版本：v3.7.15（2026-10-15 发布，含 CVE 修复；升级看
+# https://github.com/traefik/traefik/releases）。宿主端口均绑回环。
+
+services:
+  traefik:
+    image: traefik:v3.7.15
+    volumes:
+      - ./deploy/rehearsal/traefik.rehearsal.yml:/etc/traefik/traefik.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro # docker provider（只读）
+    ports:
+      - "127.0.0.1:${HOST_PORT_REHEARSAL_DASH:-8082}:8080" # dashboard（api.insecure）
+      - "127.0.0.1:${HOST_PORT_REHEARSAL_WEB:-8081}:8081" # web 前门
+      - "127.0.0.1:${HOST_PORT_REHEARSAL_WS:-9711}:9711" # qlibws（WS 专用，超时全 0）
+    networks: [qqlab]
+    restart: unless-stopped
+
+  qlib-server:
+    # 与 docker-compose.prod.yml §3.1 完全一致的 R9 label 集（演练=照抄生产定稿）：
+    # 升级头穿透 / passHostHeader / flushInterval=1ms / sticky cookie
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.qlib-rehearsal.rule=PathPrefix(`/`)"
+      - "traefik.http.routers.qlib-rehearsal.entrypoints=qlibws"
+      - "traefik.http.services.qlib-rehearsal.loadbalancer.server.port=9710"
+      - "traefik.http.services.qlib-rehearsal.loadbalancer.passHostHeader=true"
+      - "traefik.http.services.qlib-rehearsal.loadbalancer.responseForwarding.flushInterval=1ms"
+      - "traefik.http.services.qlib-rehearsal.loadbalancer.sticky.cookie=true"
+      - "traefik.http.middlewares.qqlib-ws.headers.customRequestHeaders.Connection=upgrade"
+      - "traefik.http.middlewares.qqlib-ws.headers.customRequestHeaders.Upgrade=websocket"
+      - "traefik.http.routers.qlib-rehearsal.middlewares=qqlib-ws"
+
+  backend:
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.api-rehearsal.rule=PathPrefix(`/api`)"
+      - "traefik.http.routers.api-rehearsal.entrypoints=web"
+      - "traefik.http.services.api-rehearsal.loadbalancer.server.port=8000"
+
+  frontend:
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.web-rehearsal.rule=PathPrefix(`/`)"
+      - "traefik.http.routers.web-rehearsal.entrypoints=web"
+      - "traefik.http.services.web-rehearsal.loadbalancer.server.port=3000"

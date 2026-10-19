@@ -44,11 +44,21 @@ LICENSE_REF = "Yahoo Finance Terms of Service — 公开行情，仅供研究，
 def probe_dataset(settings: Settings, org_id: str) -> dict[str, Any]:
     """校验数据可用性并返回快照（instrument_count / start / end / via）。
 
-    优先走 qlib（与回测同一条取数路径）；worker 未装 qlib（stub 环境）时
-    降级为文件系统解析。数据缺失在两条路径下都是**失败**，不会被掩盖。
+    优先走 qlib（与回测同一条取数路径）；两种情形降级为文件系统解析
+    （阶段 8 · D8-12）：
+
+    - ``COMPUTE_BACKEND != "qlib"``（stub 模式）：不触网到 Qlib-Server ——
+      stub 的语义就是「零外部依赖」，导入校验同样不该隐式依赖 qlib-server；
+      worker 镜像里装没装 qlib 都走这条（镜像有 qlib 但没起 server 时，
+      qlib 路径会在数据请求处失败，属真实失败而非数据缺失）；
+    - worker 未装 qlib（``ImportError``）：历史降级路径，保留。
+
+    数据缺失在两条路径下都是**失败**，不会被掩盖。
     """
     from qqlab.worker.qlib_env import data_dir_for, probe_dataset_via_qlib  # noqa: PLC0415
 
+    if settings.COMPUTE_BACKEND != "qlib":
+        return _probe_filesystem(Path(data_dir_for(settings, org_id)))
     try:
         return probe_dataset_via_qlib(settings, org_id)
     except ImportError:

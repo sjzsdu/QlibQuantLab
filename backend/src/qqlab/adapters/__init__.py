@@ -4,6 +4,7 @@
 """
 
 from qqlab.adapters.audit.db_audit_writer import DbAuditWriter
+from qqlab.adapters.audit.platform_audit_trail import PlatformAuditTrail
 from qqlab.adapters.auth.casdoor_provider import CasdoorAuthProvider
 from qqlab.adapters.auth.mock_provider import MockAuthProvider
 from qqlab.adapters.cache.memory_cache import MemoryCacheProvider
@@ -21,6 +22,7 @@ __all__ = [
     "MemoryCacheProvider",
     "MemoryMessageQueueProvider",
     "MockAuthProvider",
+    "PlatformAuditTrail",
     "RabbitMQProvider",
     "RedisCacheProvider",
     "S3StorageProvider",

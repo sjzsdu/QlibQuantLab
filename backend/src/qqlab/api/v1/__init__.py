@@ -13,6 +13,7 @@ from qqlab.api.v1 import (
     jobs,
     legal,
     me,
+    metrics,
     models,
     orgs,
     projects,
@@ -36,6 +37,7 @@ for _router in (
     strategies.router,
     backtests.router,
     jobs.router,
+    metrics.router,
 ):
     v1_router.include_router(_router)
 

@@ -351,6 +351,70 @@ services:
       retries: 24
       start_period: 5s
 
+  # 阶段 8 · D8-7：监控 profile —— Prometheus 抓 backend 的 /api/v1/metrics
+  # （RED/队列/worker 三分指标见 docs/stage8/03-observability-and-platform-audit.md）。
+  # Alertmanager/Grafana 不内置（范围外，接入企业告警渠道归运维）；
+  # 规则样例 deploy/monitor/rules.yml，起停：docker compose --profile monitor up -d prometheus
+  prometheus:
+    profiles: ["monitor"]
+    # quay.io 为 Prometheus 官方自带镜像源（与 docker.io 同 tag）；升级看 https://github.com/prometheus/prometheus/releases
+    image: quay.io/prometheus/prometheus:v3.5.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+    volumes:
+      - ./deploy/monitor/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./deploy/monitor/rules.yml:/etc/prometheus/rules.yml:ro
+      - prometheus_data:/prometheus
+    ports: ["127.0.0.1:${HOST_PORT_PROMETHEUS:-9090}:9090"]
+    networks: [qqlab]
+    depends_on:
+      backend: {condition: service_healthy}
+    restart: unless-stopped
+
+  # 阶段 8 · D 项（D8-8）：一次性备份/恢复，挂 --profile backup。
+  # 范围 = postgres（业务真源：org/用户/项目/因子/任务/审计/平台审计）。
+  #   · objects/minio（导出物）与 qlib_data（可经 bootstrap 再导入）不在范围，理由见
+  #     docs/stage8/04-operations-and-rehearsals.md；
+  #   · 用法（scripts/backup.sh / scripts/restore.sh 封装，宿主无需 pg_dump）：
+  #       docker compose --profile backup run --rm pg-backup          # 备份到 ./backups/
+  #       docker compose --profile backup run --rm pg-restore         # 恢复（DUMP_PATH 必填）
+  pg-backup:
+    profiles: ["backup"]
+    image: postgres:16-alpine # 与主库同 tag：pg_dump/pg_restore 版本天然匹配
+    environment: &pg-credentials
+      PGHOST: postgres
+      PGUSER: ${POSTGRES_USER}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: ${POSTGRES_DB}
+    volumes:
+      - ./backups:/backups
+    command:
+      [
+        "sh",
+        "-c",
+        "ts=$$(date -u +%Y%m%dT%H%M%SZ) && pg_dump -Fc -f /backups/qqlab-$$ts.dump && ls -lh /backups/qqlab-$$ts.dump",
+      ]
+    networks: [qqlab]
+    restart: "no"
+
+  pg-restore:
+    profiles: ["backup"]
+    image: postgres:16-alpine
+    environment: *pg-credentials
+    volumes:
+      - ./backups:/backups:ro
+    # --clean --if-exists：就地替换对象（dev/演练场景：migrate 先建好 schema 再灌数据）
+    entrypoint:
+      [
+        "sh",
+        "-c",
+        "test -n \"$$DUMP_PATH\" || { echo 'DUMP_PATH 必填（容器内路径，如 /backups/qqlab-xxx.dump）' >&2; exit 2; }; pg_restore --clean --if-exists --no-owner -d \"$$PGDATABASE\" \"$$DUMP_PATH\" && echo restored: $$DUMP_PATH",
+      ]
+    networks: [qqlab]
+    restart: "no"
+
 networks:
   qqlab: {driver: bridge}
 
@@ -363,6 +427,7 @@ volumes:
   experiments:
   objects_data:
   casdoor_data: # Casdoor dev sqlite（阶段 7，仅 --profile casdoor）
+  prometheus_data: # 指标时序库（阶段 8，仅 --profile monitor）
   backend_venv: # API 侧（Python 3.12）
   worker_venv: # worker 侧（Python 3.11 + qlib）—— 与 API 分开，避免解释器串味
   frontend_node_modules:

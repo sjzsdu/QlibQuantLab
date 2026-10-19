@@ -9,12 +9,14 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.routing import APIRoute, _IncludedRouter
 
 from qqlab.api.router import api_router
 from qqlab.config import Settings, load_settings
 from qqlab.container import Container
 from qqlab.core.errors import AppError
 from qqlab.core.logging import get_logger, setup_logging
+from qqlab.core.metrics import MetricsRegistry
 from qqlab.core.middleware import (
     CsrfCookieMiddleware,
     CSRFMiddleware,
@@ -62,6 +64,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.state.settings = settings
     app.state.container = container
+    # HTTP RED 指标注册表（阶段 8 · D8-1/D8-2）：中间件写、/api/v1/metrics 读
+    app.state.metrics = MetricsRegistry()
 
     # ---- 异常处理（统一信封） ----
     @app.exception_handler(AppError)
@@ -96,7 +100,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.add_middleware(CSRFMiddleware, settings=settings)
     app.add_middleware(CsrfCookieMiddleware, settings=settings)
     app.add_middleware(RateLimitMiddleware, settings=settings, cache=container.cache)
-    app.add_middleware(RequestContextMiddleware)
+    app.add_middleware(RequestContextMiddleware, metrics=app.state.metrics)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,
@@ -107,6 +111,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
 
     app.include_router(api_router)
+
+    # 路由模板全路径映射（阶段 8 · D8-2 RED 指标）：FastAPI ≥0.143 的延迟展开让
+    # scope["route"].path 只是**相对**路径（如 /health/live），前缀挂在 include 链上。
+    # 这里在装配期用 effective_route_contexts 建「route 对象 id → 全路径模板」，
+    # 中间件按 id 查询；查不到（装配后新增路由）退回相对路径，不会炸。
+    templates: dict[int, str] = {}
+    for _route in app.routes:
+        if isinstance(_route, _IncludedRouter):
+            for _ctx in _route.effective_route_contexts():
+                if _ctx.original_route is not None:
+                    templates[id(_ctx.original_route)] = _ctx.path
+        elif isinstance(_route, APIRoute):
+            templates[id(_route)] = _route.path
+    app.state.route_templates = templates
 
     @app.get("/", include_in_schema=False)
     async def root() -> dict:

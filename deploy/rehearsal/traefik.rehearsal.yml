@@ -1,0 +1,30 @@
+# traefik.rehearsal.yml —— 演练用 Traefik v3 静态配置（阶段 8 · E 项，D8-9）
+#
+# 对应生产 traefik.yml 的 R9 定稿（docs/stage7/03 §3.2）：qlibws 入口把读/写/响应头/空闲
+# 超时全部归零，WebSocket 长连接不被掐断。生产实例是运维自己的（正式 TLS/域名/DNS 不在
+# 本演练范围）；本文件仅供 deploy/rehearsal/docker-compose.rehearsal-traefik.yml 挂载。
+
+entryPoints:
+  web:
+    address: ":8081" # HTTP 前门（backend /api + frontend /，演练不配 TLS）
+  qlibws:
+    address: ":9711" # Qlib WebSocket 专用入口 —— 独占端口，全部流量进 qlib-server
+    transport:
+      respondingTimeouts:
+        readTimeout: 0 # WebSocket 长连接不能被读超时掐断（R9）
+        writeTimeout: 0
+      transportingTimeouts: # Traefik v3 字段；v2 用 respondingTimeouts 同位配置
+        responseHeaderTimeout: 0
+        idleTimeout: 0
+
+api:
+  dashboard: true
+  insecure: true # 演练：dashboard 落内部 :8080，由 compose 映射到宿主 127.0.0.1:8082
+
+providers:
+  docker:
+    exposedByDefault: false # 只有显式 traefik.enable=true 的容器才进路由表
+
+# 后端为 http 时跳过上游证书校验（生产同款，见 docs/stage7/03 §3.2）
+serversTransport:
+  insecureSkipVerify: true

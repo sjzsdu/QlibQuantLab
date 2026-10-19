@@ -17,6 +17,7 @@ from qqlab.adapters import (
     MemoryCacheProvider,
     MemoryMessageQueueProvider,
     MockAuthProvider,
+    PlatformAuditTrail,
     RabbitMQProvider,
     RedisCacheProvider,
     S3StorageProvider,
@@ -95,8 +96,14 @@ class Container:
         # 5. 认证（未实现的实现 → 启动即失败，绝不静默降级成 mock）
         auth = cls._build_auth(settings, cache)
 
-        # 6. 审计
-        audit = DbAuditWriter(database)
+        # 6. 审计（阶段 8 · D8-5：装饰器把平台事件双写 platform_audit_events，
+        #    剪枝节流；租户审计主路径行为不变）
+        audit: AuditWriter = PlatformAuditTrail(
+            DbAuditWriter(database),
+            database,
+            cache,
+            retention_days=settings.PLATFORM_AUDIT_RETENTION_DAYS,
+        )
 
         return cls(
             settings,

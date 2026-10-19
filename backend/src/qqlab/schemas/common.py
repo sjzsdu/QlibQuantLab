@@ -137,6 +137,22 @@ class AuditLogOut(BaseModel):
     created_at: datetime
 
 
+class PlatformAuditEventOut(BaseModel):
+    """平台审计事件（阶段 8 · D8-5）：跨租户全局视图，org 不在行上。"""
+
+    id: str
+    action: str
+    resource_type: str
+    resource_id: str | None = None
+    outcome: str
+    actor_username: str
+    actor_user_id: str | None = None
+    detail: dict = {}
+    ip: str | None = None
+    request_id: str | None = None
+    created_at: datetime
+
+
 # ------------------------------------------------------------------------ 法务
 class LegalMetaOut(BaseModel):
     code: str

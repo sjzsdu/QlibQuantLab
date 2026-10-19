@@ -1,0 +1,73 @@
+# docker-compose.rehearsal-dual-redis.yml —— R11 双 Redis 拆分演练（阶段 8 · E 项，D8-9）。
+# 与开发栈合并使用，**不改 .env**：
+#
+#   docker compose -f docker-compose.yml \
+#     -f deploy/rehearsal/docker-compose.rehearsal-dual-redis.yml \
+#     --profile qlib up -d app-redis qlib-redis backend worker qlib-server
+# 演练结束回滚（去 override 重建三容器即回 dev 单实例）：
+#   docker compose --profile qlib up -d backend worker qlib-server
+#
+# 事实（docs/stage7/03 §4，R11）：vendored qlib_server/utils.py::get_redis_connection()
+# 只有 host/port/db，**无 password 参数** → Qlib-Server 只能用免密实例。拆分方案：
+#   · app-redis   —— 带密码，应用（backend/worker 的 CACHE_URL）专用，宿主回环端口可选暴露
+#   · qlib-redis  —— 免密（Qlib-Server 硬约束），**不映射任何宿主端口**，只在 Docker 内网
+# 两实例互不相通；免密实例的暴露面 = 被攻破的同内网容器（残余风险见 stage7/03 §4）。
+#
+# 模式 B 等效：把 app-redis/qlib-redis 换成外部托管实例地址（键完全相同）——
+#   CACHE_URL=redis://:pass@external-app-redis:6379/5，REDIS_HOST=external-qlib-redis。
+#
+# 密码为演练常量（rehearsal-app-redis-pass），生产用 .env 注入，勿复用。
+
+services:
+  app-redis:
+    image: redis:7-alpine
+    command:
+      [
+        "redis-server",
+        "--appendonly",
+        "yes",
+        "--requirepass",
+        "rehearsal-app-redis-pass",
+      ]
+    volumes: [rehearsal_app_redis_data:/data]
+    ports: ["127.0.0.1:${HOST_PORT_APP_REDIS:-16380}:6379"]
+    networks: [qqlab]
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a rehearsal-app-redis-pass ping | grep PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  qlib-redis:
+    image: redis:7-alpine
+    # 刻意免密（Qlib-Server 无 password 参数）+ 刻意不映射宿主端口（R11）
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes: [rehearsal_qlib_redis_data:/data]
+    networks: [qqlab]
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  # 应用侧改指带密码实例（environment: 优先级高于 env_file 的 CACHE_URL）
+  backend:
+    environment:
+      CACHE_URL: "redis://:rehearsal-app-redis-pass@app-redis:6379/5"
+  worker:
+    environment:
+      CACHE_URL: "redis://:rehearsal-app-redis-pass@app-redis:6379/5"
+
+  # Qlib-Server 侧改指免密实例（compose 层键 REDIS_HOST → 容器内同名 env）
+  qlib-server:
+    environment:
+      REDIS_HOST: qlib-redis
+      REDIS_PORT: "6379"
+      # 不再依赖 dev 单实例（避免 depends_on 拖起不需要的服务）
+      REDIS_DB: "0"
+
+volumes:
+  rehearsal_app_redis_data:
+  rehearsal_qlib_redis_data:

@@ -15,6 +15,7 @@ from starlette.types import ASGIApp
 
 from qqlab.config import Settings
 from qqlab.core.logging import get_logger, set_request_context
+from qqlab.core.metrics import MetricsRegistry
 from qqlab.core.ratelimit import TokenBucketLimiter
 from qqlab.core.security import CSRF_HEADER, decode_session_token
 from qqlab.core.security import new_token as new_csrf_token
@@ -27,7 +28,17 @@ _EXEMPT_PREFIXES = ("/api/v1/health", "/api/v1/auth")
 
 
 class RequestContextMiddleware(BaseHTTPMiddleware):
-    """为每个请求分配 request_id（支持上游透传）并输出访问日志。"""
+    """为每个请求分配 request_id（支持上游透传）并输出访问日志。
+
+    同时记录 RED 指标（阶段 8 · D8-2）：``qqlab_http_requests_total`` 与
+    ``qqlab_http_request_duration_ms`` 直方图，route 取**路由模板**
+    （``scope["route"].path``，如 ``/api/v1/projects/{id}``）—— 不用原始 path，
+    否则每个 id 一个序列会把指标基数打爆；未匹配（404）归 ``unmatched``。
+    """
+
+    def __init__(self, app: ASGIApp, metrics: MetricsRegistry | None = None) -> None:
+        super().__init__(app)
+        self._metrics = metrics
 
     async def dispatch(self, request: Request, call_next):  # noqa: ANN001
         rid = request.headers.get("x-request-id") or uuid.uuid4().hex
@@ -38,9 +49,11 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
             response = await call_next(request)
         except Exception:
             elapsed = (time.perf_counter() - started) * 1000
+            self._observe(request, "500", elapsed)
             logger.exception("request_failed", extra={"path": request.url.path, "ms": round(elapsed, 2)})
             raise
         elapsed = (time.perf_counter() - started) * 1000
+        self._observe(request, str(response.status_code), elapsed)
         response.headers["X-Request-ID"] = rid
         logger.info(
             "request",
@@ -52,6 +65,27 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
             },
         )
         return response
+
+    def _observe(self, request: Request, status: str, elapsed_ms: float) -> None:
+        """RED 记录：路由模板优先查全路径映射（id 稳定），未匹配归 unmatched。"""
+        if self._metrics is None:
+            return
+        route = request.scope.get("route")
+        template = None
+        if route is not None:
+            templates: dict[int, str] = getattr(request.app.state, "route_templates", None) or {}
+            template = templates.get(id(route)) or getattr(route, "path", None)
+        labels = {
+            "route": template if isinstance(template, str) and template else "unmatched",
+            "method": request.method,
+            "status": status,
+        }
+        self._metrics.inc("qqlab_http_requests_total", labels)
+        self._metrics.observe_ms(
+            "qqlab_http_request_duration_ms",
+            elapsed_ms,
+            {"route": labels["route"], "method": request.method},
+        )
 
 
 class CSRFMiddleware(BaseHTTPMiddleware):

@@ -1,0 +1,29 @@
+# QlibQuantLab Prometheus 配置（阶段 8 · D8-7，docker compose --profile monitor）
+#
+# 抓取面：
+#   - qqlab-backend：GET /api/v1/metrics（dev/test 免鉴权；生产需 METRICS_TOKEN，
+#     在此用 authorization 配置：见下方注释样例）
+#   - prometheus 自身
+# Alertmanager 不内置（范围外：接入企业告警渠道归运维），规则在 /alerts 页面可见。
+#
+# 生产抓取带 token 的样例（部署时启用）：
+#   authorization:
+#     type: Bearer
+#     credentials: "<METRICS_TOKEN>"
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/rules.yml
+
+scrape_configs:
+  - job_name: qqlab-backend
+    metrics_path: /api/v1/metrics
+    static_configs:
+      - targets: ["backend:8000"]
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

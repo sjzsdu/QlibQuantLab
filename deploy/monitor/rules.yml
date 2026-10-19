@@ -1,0 +1,55 @@
+# QlibQuantLab 告警规则样例（阶段 8 · D8-7）
+# 语义依赖 /api/v1/metrics 的指标契约（docs/stage8/03-observability-and-platform-audit.md）：
+#   qqlab_worker_up / qqlab_jobs_depth / qqlab_jobs_finished_window /
+#   qqlab_queue_scrape_ok / qqlab_worker_scrape_ok / qqlab_http_requests_total
+groups:
+  - name: qqlab
+    rules:
+      # worker 心跳丢失：3×10s 无心跳 + 持续 2 分钟（单副本语义）
+      - alert: QqlabWorkerDown
+        expr: qqlab_worker_up == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "worker 心跳丢失（写缓存失败或 worker 进程退出）"
+
+      # 5 分钟窗口 5xx 占比 > 5%（分母为 0 时比较不成立，天然免疫）
+      - alert: QqlabHigh5xxRate
+        expr: |
+          sum(rate(qqlab_http_requests_total{status=~"5.."}[5m]))
+            / sum(rate(qqlab_http_requests_total[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "5xx 比例超过 5%"
+
+      # 排队积压：queued 任务数持续 10 分钟 > 50
+      - alert: QqlabQueueBacklog
+        expr: sum(qqlab_jobs_depth{status="queued"}) > 50
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "任务队列积压（queued > 50 持续 10 分钟）"
+
+      # 指标自身的 scrape 断了（DB/缓存故障会在日志里带 stacktrace）
+      - alert: QqlabMetricsScrapeBroken
+        expr: qqlab_queue_scrape_ok == 0 or qqlab_worker_scrape_ok == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "队列/worker 分段 scrape 失败（看 qqlab.metrics 日志）"
+
+      # 24h 滑动窗口失败率 > 30%（任务级，非 HTTP）
+      - alert: QqlabJobFailureRatioHigh
+        expr: |
+          sum(qqlab_jobs_finished_window{status="failed"})
+            / sum(qqlab_jobs_finished_window{status=~"succeeded|failed"}) > 0.3
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "24h 任务失败率超过 30%"

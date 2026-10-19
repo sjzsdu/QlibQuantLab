@@ -3,12 +3,26 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query, Request
+from sqlalchemy import func, select
 
-from qqlab.api.deps import get_audit_ctx, get_db_session, require_permission, success
+from qqlab.api.deps import (
+    get_audit_ctx,
+    get_db_session,
+    require_permission,
+    require_platform_admin,
+    success,
+)
 from qqlab.core.errors import ConfirmationRequiredError
 from qqlab.core.tenant import OrgScope
+from qqlab.models import PlatformAuditEvent
 from qqlab.ports.auth import CurrentUser
-from qqlab.schemas import ConfigUpdateIn, MemberAddIn, MemberRoleUpdateIn
+from qqlab.schemas import (
+    ConfigUpdateIn,
+    MemberAddIn,
+    MemberRoleUpdateIn,
+    PageOut,
+    PlatformAuditEventOut,
+)
 from qqlab.services import AdminService, AuditContext
 
 router = APIRouter(tags=["admin"])
@@ -106,3 +120,52 @@ async def update_config(
     service = _service(request, session, user, ctx)
     row = await service.update_config(config_key, payload)
     return success(request, row.model_dump(), message="配置已保存")
+
+
+# ------------------------------------------- 平台审计（阶段 8 · D8-4/D8-5）
+@router.get("/admin/platform-audit", summary="平台审计事件列表（跨租户全局视图）")
+async def list_platform_audit(
+    request: Request,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+    action: str | None = Query(None, max_length=64, description="动作前缀过滤，如 auth. / admin.config"),
+    _user=Depends(require_platform_admin),
+    session=Depends(get_db_session),
+) -> dict:
+    query = select(PlatformAuditEvent)
+    if action:
+        query = query.where(PlatformAuditEvent.action.like(f"{action}%"))
+    total = (await session.execute(select(func.count()).select_from(query.subquery()))).scalar_one()
+    rows = (
+        (
+            await session.execute(
+                query.order_by(PlatformAuditEvent.created_at.desc(), PlatformAuditEvent.id.desc())
+                .offset((page - 1) * page_size)
+                .limit(page_size)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    page_out = PageOut(
+        items=[
+            PlatformAuditEventOut(
+                id=str(r.id),
+                action=r.action,
+                resource_type=r.resource_type,
+                resource_id=r.resource_id,
+                outcome=r.outcome,
+                actor_username=r.actor_username,
+                actor_user_id=str(r.actor_user_id) if r.actor_user_id else None,
+                detail=dict(r.detail or {}),
+                ip=r.ip,
+                request_id=r.request_id,
+                created_at=r.created_at,
+            )
+            for r in rows
+        ],
+        total=total,
+        page=page,
+        page_size=page_size,
+    )
+    return success(request, page_out.model_dump())
