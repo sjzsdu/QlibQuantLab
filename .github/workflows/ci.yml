@@ -1,0 +1,172 @@
+# CI 主流水线（阶段 8 · A 项）：ruff → 后端全量测试 → 前端 lint/tsc/build → Playwright e2e。
+#
+# 设计要点（docs/stage8/02-ci-pipeline.md）：
+# - backend job 起 Postgres / Redis / RabbitMQ services：pytest 主体走 sqlite+memory
+#   （tests/conftest.py 会覆盖环境变量），services 用于 ① 契约测试真源
+#   （TEST_REDIS_URL / TEST_MQ_URL）② alembic upgrade head 打到真实 Postgres（验迁移）。
+#   COMPUTE_BACKEND=stub —— CI 永不起 qlib-server。
+# - e2e job 在干净 compose 栈上跑，种子复种走 scripts/seed_dev.sh --ci（与 dev 事故
+#   恢复同一入口，关闭 R7-5）；--workers=1 串行 + storageState 复用登录，
+#   满足登录限流 5/min/IP 预算（seed 1 次 + setup 1 次 + auth 1 次，retries 留余量）。
+# - stage-smoke（真 qlib 链路 / 真 Casdoor）不进本文件：手动触发，见 stage-smoke.yml。
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # 与 backend/Dockerfile 钉的 uv 版本一致（uv.lock 格式兼容性）
+  UV_VERSION: "0.12.5"
+
+jobs:
+  backend:
+    name: backend · ruff + pytest（stub compute）
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      APP_ENV: test
+      COMPUTE_BACKEND: stub
+      # alembic 步骤用（pytest 主体由 tests/conftest.py 覆盖为 sqlite/memory）
+      DATABASE_BACKEND: postgres
+      DATABASE_URL: postgresql+asyncpg://qqlab:qqlab-ci@localhost:5432/qqlab
+      CACHE_URL: redis://localhost:6379/0
+      MQ_URL: amqp://qqlab:qqlab-ci@localhost:5672/%2Fqqlab
+      QLIB_SERVER_WS_URL: ws://localhost:9710
+      APP_JWT_SECRET: ci-only-secret-0123456789abcdef0123456789abcdef
+      CORS_ALLOW_ORIGINS: http://localhost:3000
+      # 契约测试真源（未设置时只跑 memory 实现）
+      TEST_REDIS_URL: redis://localhost:6379/9
+      TEST_MQ_URL: amqp://qqlab:qqlab-ci@localhost:5672/%2Fqqlab
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: qqlab
+          POSTGRES_PASSWORD: qqlab-ci
+          POSTGRES_DB: qqlab
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U qqlab -d qqlab"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+      rabbitmq:
+        image: rabbitmq:3.13-management-alpine
+        env:
+          RABBITMQ_DEFAULT_USER: qqlab
+          RABBITMQ_DEFAULT_PASS: qqlab-ci
+          RABBITMQ_DEFAULT_VHOST: /qqlab
+        ports: ["5672:5672"]
+        options: >-
+          --health-cmd "rabbitmq-diagnostics -q ping"
+          --health-interval 10s --health-timeout 10s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v10
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+
+      - name: 安装依赖（uv sync --extra dev；禁用 --all-extras，qlib extra 会挂死）
+        run: uv sync --frozen --extra dev
+
+      - name: ruff
+        run: uv run --extra dev ruff check .
+
+      - name: pytest 全量（含 redis/rabbitmq 契约测试）
+        run: uv run --extra dev pytest -q
+
+      - name: alembic upgrade head（真实 Postgres，验证迁移链）
+        run: uv run --extra dev alembic upgrade head
+
+  frontend:
+    name: frontend · lint + typecheck + build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 pnpm（与 frontend/Dockerfile 钉的版本一致）
+        run: npm install -g pnpm@12.9.1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm build
+
+  e2e:
+    name: e2e · 干净 compose 栈 + seed + Playwright（串行）
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      E2E_BASE_URL: http://localhost:3000
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 生成 .env（CI 本地副本，绝不改仓库文件）
+        run: cp .env.example .env
+
+      - name: 构建并启动模式 A 栈（stub compute，不起 qlib profile）
+        run: docker compose up -d --build
+
+      - name: 等待 backend ready
+        run: |
+          for i in $(seq 1 90); do
+            if curl -sf http://localhost:8000/api/v1/health/ready >/dev/null; then
+              echo "backend ready"; exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::backend 未就绪"; docker compose ps; docker compose logs --tail 80 backend
+          exit 1
+
+      - name: 复种种子（scripts/seed_dev.sh --ci：伪造最小数据目录 + 导入 + e2e 锚点）
+        run: scripts/seed_dev.sh --ci
+
+      - name: 安装 pnpm 与 Playwright 依赖
+        working-directory: frontend
+        run: |
+          npm install -g pnpm@12.9.1
+          pnpm install --frozen-lockfile
+
+      - name: Playwright e2e（串行 + storageState 复用登录）
+        working-directory: frontend
+        run: pnpm exec playwright test --workers=1
+
+      - name: 失败时导出栈日志（artifact）
+        if: failure()
+        run: docker compose ps && docker compose logs --tail 300 > compose-logs.txt
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: e2e-diagnostics
+          path: |
+            compose-logs.txt
+            frontend/test-results/
+          if-no-files-found: ignore
+          retention-days: 7

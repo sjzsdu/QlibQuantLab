@@ -28,6 +28,7 @@
 | 5 | 训练 → 回测 → 可视化 → 任务中心 | ✅ 已交付，**304 个测试全绿** + live smoke 43/43 + 浏览器冒烟 7 页 → `docs/stage5/` |
 | 6 | 审计 / 权限 / 合规 / e2e / README 定稿 | ✅ 已交付，**401 个测试全绿** + live smoke 34/34 + Playwright e2e 11/11 → `docs/stage6/` |
 | 7 | 接入 Casdoor + 生产部署文档 | ✅ 已交付，**444 个测试全绿** + stage7 smoke 17/17 + stage6 smoke 34/34 + e2e 11/11 → `docs/stage7/` |
+| 8 | 生产上线准备与平台治理（CI 门禁 / /metrics / 平台审计 / 备份演练 / Traefik·双 Redis 演练 / 一键复种） | ✅ 已交付，**477 个测试全绿**（真源 483）+ stage6 34/34 + stage7 17/17 + e2e 11/11（clean clone 与 dev 双环境）+ pg 损毁恢复演练 → `docs/stage8/` |
 
 每阶段固定交付：**目标 → 文件树 → 代码 → 启动命令 → 测试方法 → 已知风险 → 验收清单**，你确认后才进入下一阶段。
 
@@ -106,8 +107,8 @@ QlibQuantLab/
 │   │   ├── container.py  ★ 唯一装配点（唯一 import adapters 的地方）
 │   │   ├── api/ services/ repositories/ models/ core/ schemas/
 │   │   └── worker/       独立任务进程（qlib 只允许在 worker/qlib_env.py + adapters/compute/qlib_compute.py）
-│   ├── alembic/          0001：一次建全 17 张表 + 种子；0004：factor_compute_runs（阶段 6）
-│   └── tests/            architecture · unit · contract · api · integration（401 用例 + 1 skip）
+│   ├── alembic/          0001：一次建全表 + 种子；0004：factor_compute_runs；0005：platform_audit_events（阶段 8）
+│   └── tests/            architecture · unit · contract · api · integration（477 用例 + 1 skip）
 ├── frontend/         Next.js 15 + TS + AntD 5 + TanStack Query（pnpm）+ Playwright e2e
 ├── docs/stage1/      架构设计（9 份，阶段基准）
 ├── docs/stage2/      阶段 2 交付文档
@@ -115,6 +116,9 @@ QlibQuantLab/
 ├── docs/stage4/      阶段 4 交付文档（项目 / 数据 / 因子）
 ├── docs/stage5/      阶段 5 交付文档（训练 / 回测 / 可视化 / 任务中心）
 ├── docs/stage6/      阶段 6 交付文档（合规与可验证性补齐）
+├── docs/stage7/      阶段 7 交付文档（Casdoor OIDC + 生产部署）
+├── docs/stage8/      阶段 8 交付文档（CI 门禁 / 可观测 / 平台审计 / 备份演练）
+├── .github/workflows/  ci.yml（push 门禁）· stage-smoke.yml（手动重冒烟）
 ├── docker-compose.yml       模式 A · 自包含（qlib 链路挂 --profile qlib）
 ├── docker-compose.prod.yml  模式 B · 复用外部依赖 + Traefik
 ├── .env.example · Makefile · scripts/
@@ -140,7 +144,7 @@ QlibQuantLab/
 ## 测试
 
 ```bash
-cd backend && uv run pytest -q        # 401 passed + 1 skipped，<15s，零外部依赖
+cd backend && uv run pytest -q        # 477 passed + 1 skipped，<30s，零外部依赖
 uv run ruff check .                   # All checks passed
 # 真实后端契约（可选，需本地服务；redis 端口按默认 HOST_PORT_REDIS=16379，用外部实例就改成实际值）
 TEST_REDIS_URL=redis://localhost:16379/9 uv run pytest tests/contract -q
@@ -158,6 +162,8 @@ TEST_REDIS_URL=redis://localhost:16379/9 uv run pytest tests/contract -q
 - `docs/stage4/` — 阶段 4：项目 / 数据（合规台账 + 导入校验）/ 因子库
 - `docs/stage5/` — 阶段 5：因子快照 → 训练 → 双信号回测 → 四标注 → 任务中心
 - `docs/stage6/` — 阶段 6：审计导出、RBAC 扫描、universe、导出/持仓/打印、因子计算/IC、训练复用、合规页、Playwright e2e
+- `docs/stage7/` — 阶段 7：Casdoor OIDC（PKCE/JWKS/fail-closed）、生产部署定稿（模式 B / R9 Traefik / R11 Redis 拆分）
+- `docs/stage8/` — 阶段 8：CI 三 job 门禁、`/metrics` + Prometheus、平台审计与平台管理员、备份/恢复演练、Traefik·双 Redis rehearsal 验证表
 - 阶段 1 风险登记册与七阶段路线图见 `docs/stage1/08-risks-and-roadmap.md`
 - **面向外部用户的文档**在 `website/docs/`（5 分钟跑起来 / 核心概念 / 模块指南 / 部署），与上面的内部交付文档刻意分开
 

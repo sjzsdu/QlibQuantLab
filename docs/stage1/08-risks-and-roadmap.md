@@ -1,6 +1,6 @@
 # 08 · 已知风险与七阶段路线图
 
-## 1. 风险登记册（R1–R10）
+## 1. 风险登记册（R1–R11）
 
 | # | 风险 | 影响 | 可能性 | 缓解方案 | 触发阶段 |
 |---|------|------|--------|----------|----------|
@@ -12,9 +12,9 @@
 | **R6** | qlib 是**进程级单例**，不能并发处理不同 org 任务 | 任务串行、吞吐低 | 确定 | `QLIB_WORKER_CONCURRENCY=1`，靠横向扩 worker 副本并行；文档明示 | 阶段 3/5 |
 | **R7** | Yahoo 数据下载在当前网络不可用 | 数据导不进来 | 中 | `bootstrap` 脚本三段式：官方下载 → 本地备份 zip → 指定 `STAGING_URL`；导入结果落授权台账 | 阶段 3/4 |
 | **R8** | Next.js 15 + React 19 与 antd 5 的 peer 依赖冲突 | 前端装不上 | 中 | 若冲突锁 `react@18.3.1`（Next 15 支持）；`pnpm` 用 `peerDependencyRules.ignoreMissing` 兜底 | 阶段 2 |
-| **R9** | Traefik 长连接超时掐断 Qlib WebSocket（生产） | 阶段 7 上线后任务全失败 | 中 | 静态配置关闭 read/write/responding 超时 + `passHostHeader` + 升级头 + sticky；列入切换清单与验证项 | 阶段 7 ✅ 动态 labels 已进 prod compose（`qqlib-ws`/sticky/flushInterval）+ 静态项与验证清单定稿 [stage7/03](../stage7/03-production-deployment.md)；静态项待运维在 Traefik 实例执行 |
+| **R9** | Traefik 长连接超时掐断 Qlib WebSocket（生产） | 阶段 7 上线后任务全失败 | 中 | 静态配置关闭 read/write/responding 超时 + `passHostHeader` + 升级头 + sticky；列入切换清单与验证项 | 阶段 7 ✅ 动态 labels 已进 prod compose（`qqlib-ws`/sticky/flushInterval）+ 静态项与验证清单定稿 [stage7/03](../stage7/03-production-deployment.md)；静态项待运维在 Traefik 实例执行 → 阶段 8 ✅ 演练 override `deploy/rehearsal/` + 验证表 A（A1–A6）回写同文件 §5.4，**表 A 待运维有网执行** |
 | **R10** | `jobs` 任务幂等与锁：worker 崩溃导致重复执行/死锁 | 结果重复、状态错乱 | 中 | `CacheProvider` 分布式锁 + DB 心跳租约 + `payload_hash` 幂等键 + 死信队列 + 阶段 5 的重试上限 | 阶段 5 |
-| **R11** | **Qlib-Server 不支持 Redis 密码**：`qlib_server/utils.py` 的 `get_redis_connection()` 只有 `host/port/db`，无 `password` | 模式 B 指向带密码的外部 Redis 时 qlib-server 直接连不上 | 高 | ① 开发环境共用实例免密 + 仅内网暴露；② 模式 B **推荐**给 qlib-server 单独一个免密 Redis（内网、不对外），应用用带密码的外部 Redis，两者通过 `QLIB_SERVER_REDIS_HOST` 与 `CACHE_URL` 分开配置；③ 兜底：fork qlib-server 并给 `get_redis_connection()` 加 `password` 参数（改动极小，需记录补丁 commit） | 阶段 3 ✅ 方案②定稿（qlib-server 免密专属 Redis 仅内网 + 应用带密码 Redis 分离，`QLIB_SERVER_REDIS_HOST`/`CACHE_URL` 解耦）[stage7/03](../stage7/03-production-deployment.md) §4；切换时执行 |
+| **R11** | **Qlib-Server 不支持 Redis 密码**：`qlib_server/utils.py` 的 `get_redis_connection()` 只有 `host/port/db`，无 `password` | 模式 B 指向带密码的外部 Redis 时 qlib-server 直接连不上 | 高 | ① 开发环境共用实例免密 + 仅内网暴露；② 模式 B **推荐**给 qlib-server 单独一个免密 Redis（内网、不对外），应用用带密码的外部 Redis，两者通过 `QLIB_SERVER_REDIS_HOST` 与 `CACHE_URL` 分开配置；③ 兜底：fork qlib-server 并给 `get_redis_connection()` 加 `password` 参数（改动极小，需记录补丁 commit） | 阶段 3 ✅ 方案②定稿（qlib-server 免密专属 Redis 仅内网 + 应用带密码 Redis 分离，`QLIB_SERVER_REDIS_HOST`/`CACHE_URL` 解耦）[stage7/03](../stage7/03-production-deployment.md) §4；切换时执行 → 阶段 8 ✅ 双 Redis 演练表 **B1–B10 本机实测通过**（同 §5.4），切换照表执行 |
 
 **降级策略总纲**：任何 qlib-server 风险（R1–R5）都**不阻塞阶段 2/4/5/6**——`ComputePort` 预留 `stub_compute` 实现（合成数据跑通状态机与前端），阶段 3 通过后再切 `qlib_compute`。这是可插拔架构的直接收益。
 

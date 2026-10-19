@@ -1,4 +1,4 @@
-"""Alembic 首个迁移的端到端验证：17 张表 + 开发种子数据。
+"""Alembic 迁移链的端到端验证：全量业务表 + 开发种子数据。
 
 单独跑一个 alembic 子进程（而不是复用测试库），确保 `alembic/env.py` 的 async engine
 与 seed 逻辑在真实 CLI 下也能工作。
@@ -35,6 +35,8 @@ BUSINESS_TABLES = {
     "org_members",
 }
 IDENTITY_TABLES = {"organizations", "users"}
+#: 全局表（无 org_id，阶段 8 · D8-5）
+PLATFORM_TABLES = {"platform_audit_events"}
 
 
 @pytest.fixture(scope="module")
@@ -70,7 +72,7 @@ def _tables(db_path: Path) -> set[str]:
 
 def test_migration_creates_all_tables(migrated_db: Path) -> None:
     tables = _tables(migrated_db)
-    missing = (BUSINESS_TABLES | IDENTITY_TABLES) - tables
+    missing = (BUSINESS_TABLES | IDENTITY_TABLES | PLATFORM_TABLES) - tables
     assert not missing, f"缺少表: {sorted(missing)}"
     assert "alembic_version" in tables
 

@@ -32,6 +32,9 @@ PUBLIC_PATTERNS = (
     "/api/v1/system/info",
     "/api/v1/auth/*",
     "/api/v1/legal/*",
+    # 阶段 8 · D8-1：Prometheus scrape 无会话（dev/test 免鉴权；生产由 METRICS_TOKEN
+    # 自管：空 = 404 fail-closed，非空 = Bearer/X-Metrics-Token 校验，见 api/v1/metrics.py）
+    "/api/v1/metrics",
 )
 
 #: 会话即可、不要求权限点的路由（读自己的身份与权限、读当前组织）。

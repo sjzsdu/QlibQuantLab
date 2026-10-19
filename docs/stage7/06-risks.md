@@ -64,6 +64,6 @@ e2e 用 storageState 把登录压进 setup。CI 并行时仍须串行（或 stag
 
 | 项 | 状态 |
 |----|------|
-| R9 Traefik 长连接超时 | **文档/清单已备**（[03 §3](./03-production-deployment.md)）：compose 动态 labels 全套（升级头/passHostHeader/flushInterval/sticky）就绪；Traefik **静态**超时关闭属运维侧执行项，已列入模式 B 切换清单与 stage1/08 台账 |
-| R11 Qlib-Server 不支持 Redis 密码 | **方案已定稿入 03 §4**：qlib-server 专属免密 Redis（仅内网）与应用带密码 Redis 分离，`QLIB_SERVER_REDIS_HOST` / `CACHE_URL` 分配；生产切换时按清单执行 |
+| R9 Traefik 长连接超时 | **文档/清单已备**（[03 §3](./03-production-deployment.md)）：compose 动态 labels 全套（升级头/passHostHeader/flushInterval/sticky）就绪；Traefik **静态**超时关闭属运维侧执行项，已列入模式 B 切换清单与 stage1/08 台账 → **阶段 8：** 演练 override 与验证表 A（A1–A6）落 03 §5.4（`deploy/rehearsal/`），表 A 待运维有网执行 |
+| R11 Qlib-Server 不支持 Redis 密码 | **方案已定稿入 03 §4**：qlib-server 专属免密 Redis（仅内网）与应用带密码 Redis 分离，`QLIB_SERVER_REDIS_HOST` / `CACHE_URL` 分配；生产切换时按清单执行 → **阶段 8：** 双 Redis 演练表 **B1–B10 本机实测通过**（03 §5.4），切换照表执行 |
 | mock → casdoor 切换演练 | dev 已用冒烟覆盖 env 块（`docker-compose.casdoor-smoke.yml`）；生产演练需真实 IdP 域名，归入模式 B 上线流程 |

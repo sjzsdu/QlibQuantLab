@@ -128,6 +128,54 @@ stage1/08 R11 行状态已回写为「方案定稿 + 切换清单执行项」。
 7. 断网演练：停外部 Redis → `/ready` 变红且提示明确；停 casdoor → 登录 503「身份服务不可达」、已登录会话不受影响（平台自签会话，D7-8）。
 8. 回滚路径：`AUTH_PROVIDER` 改回 mock **仅限非生产**（生产启动即拒绝）；生产回滚 = 回滚镜像 + `alembic downgrade`（如有迁移）。
 
+### 5.4 R9 / R11 演练验证表（阶段 8 · E 项，D8-9，`deploy/rehearsal/`）
+
+演练入口（与开发/生产栈合并的 override，**不改 `.env`**；文件头有完整用法）：
+
+```bash
+# 表 A · Traefik WS 穿透
+docker compose -f docker-compose.yml \
+  -f deploy/rehearsal/docker-compose.rehearsal-traefik.yml --profile qlib up -d traefik
+# 表 B · 双 Redis 拆分（演练后去 override 重建三容器即回滚）
+docker compose -f docker-compose.yml \
+  -f deploy/rehearsal/docker-compose.rehearsal-dual-redis.yml --profile qlib \
+  up -d app-redis qlib-redis backend worker qlib-server
+```
+
+#### 表 A · Traefik WS 穿透（R9）——**待运维环境执行**
+
+> 本机未跑真 Traefik：traefik 镜像仅发布在 docker.io（本机当前网络不可达，quay.io 无官方发布）。
+> labels 与静态超时已按生产定稿（§3.1 + §3.2，1:1 照抄）固化进 override
+> （`traefik:v3.7.15`，2026-10-15 发布含 CVE 修复），在有网环境逐行执行即产出实测结果。
+
+| # | 步骤（命令） | 预期 | 判据含义 |
+|---|---|---|---|
+| A1 | `docker compose -f docker-compose.yml -f deploy/rehearsal/docker-compose.rehearsal-traefik.yml --profile qlib up -d traefik` | traefik 容器起且 `traefik:v3.7.15` | 演练实例就位（qlibws 入口超时全 0） |
+| A2 | `curl -s http://127.0.0.1:8082/api/overview \| head -c 60` | 返回 JSON（dashboard API 活） | docker provider 正常读容器 labels |
+| A3 | `curl -si 'http://127.0.0.1:9711/socket.io/?EIO=4&transport=polling' \| head -3` | `HTTP/1.1 200` + `set-cookie io=…` | socket.io 握手经 Traefik qlibws 入口穿透成功 |
+| A4 | `python scripts/qlib_connectivity_smoke.py ws://localhost:9711` | 全部 check OK（含真 WS upgrade） | **R9 核心**：升级头 + 长连接不被超时掐断 |
+| A5 | `curl -s http://127.0.0.1:8081/api/v1/health/live` | `status=live` | HTTP 前门 → backend 路由正确（`/api` 优先于 `/`） |
+| A6 | 生产等效：worker 日志出现 `calendar_response`（§3.3） | 日志有该事件 | wss 经生产 Traefik 的最终收敛判据 |
+
+#### 表 B · 双 Redis 拆分（R11）——本机演练**实测**（2026-10-19，阶段 8 · E 项）
+
+> 方式：override 合并 dev 栈起 `app-redis`（带密码）+ `qlib-redis`（免密、零宿主端口），
+> backend/worker/qlib-server 三容器改指各自实例；演练后去 override 重建回滚（B10 已验证）。
+> 模式 B 等效：两地址换外部托管实例，键完全相同（`CACHE_URL` / `REDIS_HOST`）。
+
+| # | 验证点（命令） | 预期 | 实测（2026-10-19） |
+|---|---|---|---|
+| B1 | `docker exec qqlab-app-redis-1 redis-cli ping` | `NOAUTH Authentication required.` | ✅ NOAUTH（未授权即拒） |
+| B2 | `redis-cli -a rehearsal-app-redis-pass ping`（经 `127.0.0.1:16380`） | `PONG` | ✅ PONG |
+| B3 | `docker port qqlab-qlib-redis-1` | 无输出（零宿主端口） | ✅ 空（免密实例不出内网） |
+| B4 | `docker exec qqlab-backend-1 printenv CACHE_URL`（worker 同） | `redis://:…@app-redis:6379/5` | ✅ 两容器一致（override `environment:` 覆盖 env_file） |
+| B5 | `docker exec qqlab-qlib-server-1 printenv REDIS_HOST` | `qlib-redis` | ✅ |
+| B6 | `curl -s localhost:8000/api/v1/health/ready` | `cache=true`，全绿 | ✅ `database/cache/queue/storage/auth` 全 true |
+| B7 | `redis-cli -a … -n 5 keys 'qqlab:*'`（app-redis） | 见 `qqlab:worker:heartbeat` | ✅ 心跳落 app-redis；`/api/v1/metrics` 读回 `qqlab_worker_up 1`、`heartbeat_age_seconds 4.9` |
+| B8 | worker 日志 `qlib_server_probe` | `ok=true detail=ws://qlib-server:9710` | ✅ Qlib-Server 在**免密实例**上存活并完成 socket.io 握手 |
+| B9 | `redis-cli -a … -n 0 dbsize`（app-redis） | 0（无 qlib-server 状态键） | ✅ 两实例互不串数据；宿主亦无端口可达 qlib-redis |
+| B10 | 回滚：去 override `up -d backend worker qlib-server` | 恢复单实例且 probe ok | ✅ backend healthy + `qlib_server_probe ok=true` |
+
 ## 6. 附：Docker Hub 不可达环境的镜像获取
 
 生产构建同样受镜像源约束，按阶段 6/7 两次实测的配方（详细命令与 digest 见

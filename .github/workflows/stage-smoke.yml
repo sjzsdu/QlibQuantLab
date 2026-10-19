@@ -1,0 +1,117 @@
+# 阶段冒烟（真链路，手动触发）：真 qlib 链路 / 真 Casdoor 的 Stage 冒烟验证。
+#
+# 与 ci.yml 分开的原因（阶段 8 · A 项，docs/stage8/02-ci-pipeline.md）：
+#   ① 需要下载行情数据（外网 + 官方 zip 两阶段源，耗时且非确定性）；
+#   ② 需要起 qlib profile / casdoor profile，构建 pyqlib worker 镜像；
+#   ③ 跑完分钟级，不应阻塞每次 push 的主门禁。
+# 因此做成 workflow_dispatch 手动触发（PR 合并前按需手动点），入口与 dev 完全一致：
+#   种子复种 scripts/seed_dev.sh → stage6_smoke / stage7_smoke（串行 + 65s 限流错峰）。
+#
+# 登录限流 5/min/IP 的预算编排（不可省）：
+#   seed(1) → [sleep 65] → stage6(4) → [sleep 65] → stage7(≈12，自身已内置 60s 错峰) → [sleep 65] → e2e(≈2)
+name: stage-smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: "冒烟套件"
+        type: choice
+        options: [stage6, stage6+stage7]
+        default: stage6
+      run_e2e:
+        description: "冒烟后是否追加 Playwright e2e（再错峰 65s）"
+        type: boolean
+        default: false
+      qlib_data_symbols:
+        description: "make qlib-data 导入的标的数（0 = 已有数据则跳过下载）"
+        type: string
+        default: "50"
+      casdoor_smoke:
+        description: "stage6+stage7 时套用 casdoor-smoke override（stage7 真 Casdoor）"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: qlib 链路冒烟 · ${{ inputs.suite }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 生成 .env 并切到真链路（CI 本地副本，不碰仓库文件）
+        run: |
+          cp .env.example .env
+          sed -i 's/^COMPUTE_BACKEND=.*/COMPUTE_BACKEND=qlib/' .env
+          sed -i "s/^QLIB_DATA_SYMBOLS=.*/QLIB_DATA_SYMBOLS=${{ inputs.qlib_data_symbols }}/" .env
+
+      - name: 起栈（含 qlib profile：qlib-server + rabbitmq-init）
+        run: docker compose --profile qlib up -d --build
+
+      - name: 等待 backend ready
+        run: |
+          for i in $(seq 1 120); do
+            if curl -sf http://localhost:8000/api/v1/health/ready >/dev/null; then
+              echo "backend ready"; exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::backend 未就绪"; docker compose ps; docker compose logs --tail 80 backend
+          exit 1
+
+      - name: 复种种子（qlib-data + dataset 导入 + e2e 锚点，dev 模式同一入口）
+        run: scripts/seed_dev.sh
+
+      - name: 错峰（限流 5/min/IP，seed 刚用掉 1 次登录）
+        run: sleep 65
+
+      - name: Stage6 冒烟（34 项）
+        run: python3 scripts/stage6_smoke.py
+
+      - name: 错峰（stage6 用了 4 次登录）
+        if: inputs.suite == 'stage6+stage7'
+        run: sleep 65
+
+      - name: Stage7 冒烟（17 项，真 Casdoor）
+        if: inputs.suite == 'stage6+stage7' && inputs.casdoor_smoke
+        run: |
+          docker compose -f docker-compose.yml -f docker-compose.casdoor-smoke.yml up -d --build casdoor
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:8000/api/v1/health/ready >/dev/null; then echo ready; break; fi
+            sleep 2
+          done
+          python3 scripts/stage7_smoke.py
+
+      - name: Stage7 冒烟（17 项，无 Casdoor override：跳过 profile 依赖部分）
+        if: inputs.suite == 'stage6+stage7' && !inputs.casdoor_smoke
+        run: python3 scripts/stage7_smoke.py
+
+      - name: 错峰（stage7 用约 12 次登录）
+        if: inputs.run_e2e
+        run: sleep 65
+
+      - name: Playwright e2e（串行）
+        if: inputs.run_e2e
+        working-directory: frontend
+        run: |
+          npm install -g pnpm@12.9.1
+          pnpm install --frozen-lockfile
+          pnpm exec playwright test --workers=1
+
+      - name: 失败时导出日志
+        if: failure()
+        run: docker compose ps && docker compose logs --tail 400 > compose-logs.txt
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: stage-smoke-diagnostics
+          path: |
+            compose-logs.txt
+            frontend/test-results/
+          if-no-files-found: ignore
+          retention-days: 7
