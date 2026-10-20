@@ -5,9 +5,9 @@
   docker compose --profile qlib run --rm worker python /scripts/qlib_connectivity_smoke.py
 
 三级探测，逐级深入，任一失败给出可读结论（不抛裸栈）：
-  L1  WebSocket 握手（socketio client → qlib-server:9710）
-  L2  qlib.init + D.instruments("all")（走 Qlib-Server 的 HTTP/WS 取数）
-  L3  D.features 抽样（真实特征数据可取回）
+  L1  socketio EIO3 握手（client → QLIB_SERVER_WS_URL，经 Traefik 入口；唯一经 server 的检查）
+  L2  qlib.init + D.instruments("all")（读本地共享卷 LocalProvider——非 server 路径，见 stage1/06 §8.6）
+  L3  D.features 抽样（同上，本地读取真实特征数据）
 
 退出码：0 = 全通过；1 = 任一级失败。输出为结构化 JSON（便于脚本断言）。
 """
@@ -34,7 +34,7 @@ def level1_ws_handshake(settings) -> dict:
 
 
 def level2_instruments(settings) -> dict:
-    """L2：qlib 在线模式列标的。"""
+    """L2：列标的（本地共享卷 LocalProvider 读取；验证数据卷与租户路径）。"""
     from qqlab.worker.qlib_env import data_dir_for, qlib_online
 
     try:

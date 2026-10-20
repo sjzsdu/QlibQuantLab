@@ -2,7 +2,7 @@
 # 用法：make help
 
 .PHONY: help env install dev dev-logs dev-down ps build migrate test test-backend test-frontend lint format smoke clean \
-        qlib-up qlib-data qlib-smoke backtest-smoke dataset-import-smoke deploy-images
+        qlib-up qlib-data qlib-smoke backtest-smoke dataset-import-smoke deploy-images deploy-pull
 
 help: ## 列出所有命令
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
@@ -75,8 +75,11 @@ backtest-smoke: ## 入队最小回测（先跑 qlib-data；worker 消费后 logs
 dataset-import-smoke: ## 入队数据导入任务（校验目录 + 登记台账；worker 消费）
 	docker compose exec backend python /scripts/enqueue_backtest_smoke.py dataset_import
 
-deploy-images: ## 构建并推送四个生产镜像（IMAGE_PREFIX=sjzsdu TAG=v1.0.0 make deploy-images）
+deploy-images: ## 构建并推送四个生产镜像（TAG 默认 = sha-<git> 绑定提交；IMAGE_PREFIX=sjzsdu make deploy-images）
 	IMAGE_PREFIX=$(IMAGE_PREFIX) TAG=$(TAG) TARGET_PLATFORM=$(TARGET_PLATFORM) scripts/build_push_images.sh
+
+deploy-pull: ## 生产侧拉取镜像（IMAGE_TAG=sha-<git> make deploy-pull；tag 见 deploy/image-manifest.json）
+	docker compose -f docker-compose.prod.yml pull frontend backend worker qlib-server
 
 seed: ## 一键复种（qlib-data + dataset 导入 + e2e 锚点；--ci 见 scripts/seed_dev.sh 头注释）
 	scripts/seed_dev.sh

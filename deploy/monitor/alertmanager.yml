@@ -1,0 +1,33 @@
+# alertmanager.yml —— 阶段 9 · D 项：Alertmanager 路由配置。
+#
+# 分工（接口 + 配置驱动）：
+#   Prometheus  = 判定触发/恢复（deploy/monitor/rules.yml 五条规则）
+#   Alertmanager = 去重/分组/抑制/静默 + **唯一 receiver：notify-bridge webhook**
+#   notify-bridge（deploy/monitor/notify_bridge.py）= 通道扇出 —— 启用企微/钉钉/飞书/邮件
+#     哪些通道由桥的环境变量决定（NOTIFY_WECOM_URL / NOTIFY_DINGTALK_URL / NOTIFY_FEISHU_URL /
+#     NOTIFY_EMAIL_* / NOTIFY_SINK_DIR），换通道 = 改配置，本文件与告警规则零改动。
+#
+# 报文契约：Alertmanager 标准 webhook JSON（status/alerts[]/labels/annotations）。
+# send_resolved: true —— 恢复通知也走桥（RESOLVED 回执）。
+
+global:
+  resolve_timeout: 5m
+
+route:
+  receiver: notify-bridge
+  group_by: [alertname, severity]
+  group_wait: 30s # 首次触发后攒 30s（同组多告警合并成一条通知）
+  group_interval: 5m
+  repeat_interval: 12h # 未恢复时每 12h 重发（值班免打扰基线）
+
+receivers:
+  - name: notify-bridge
+    webhook_configs:
+      - url: http://notify-bridge:9099/notify
+        send_resolved: true
+
+inhibit_rules:
+  # critical 触发时抑制同名告警的 warning 级（如 worker down 时不再报失败率 warning 噪声）
+  - source_matchers: [severity="critical"]
+    target_matchers: [severity="warning"]
+    equal: [alertname]

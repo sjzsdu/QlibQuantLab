@@ -4,9 +4,9 @@
 
 <p align="center">
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-4F46E5.svg"></a>
-  <img alt="backend tests" src="https://img.shields.io/badge/backend%20tests-401%20passed-0891B2.svg">
+  <img alt="backend tests" src="https://img.shields.io/badge/backend%20tests-477%20passed-0891B2.svg">
   <img alt="playwright e2e" src="https://img.shields.io/badge/playwright%20e2e-11%20passed-0891B2.svg">
-  <img alt="stage" src="https://img.shields.io/badge/stage-1--6%20delivered-64748B.svg">
+  <img alt="stage" src="https://img.shields.io/badge/stage-1--9%20delivered-64748B.svg">
 </p>
 
 # QlibQuantLab
@@ -29,6 +29,7 @@
 | 6 | 审计 / 权限 / 合规 / e2e / README 定稿 | ✅ 已交付，**401 个测试全绿** + live smoke 34/34 + Playwright e2e 11/11 → `docs/stage6/` |
 | 7 | 接入 Casdoor + 生产部署文档 | ✅ 已交付，**444 个测试全绿** + stage7 smoke 17/17 + stage6 smoke 34/34 + e2e 11/11 → `docs/stage7/` |
 | 8 | 生产上线准备与平台治理（CI 门禁 / /metrics / 平台审计 / 备份演练 / Traefik·双 Redis 演练 / 一键复种） | ✅ 已交付，**477 个测试全绿**（真源 483）+ stage6 34/34 + stage7 17/17 + e2e 11/11（clean clone 与 dev 双环境）+ pg 损毁恢复演练 → `docs/stage8/` |
+| 9 | 镜像发布与生产演练（镜像追溯回滚 / rehearsal 一键演练 / Traefik 表 A 实测 / 告警链 / 备份异地化 / 运营交接） | ✅ 已交付，表 A A1–A6 实测全过 + A6 数据路径定性 + 审查 3 阻断缺陷修复 → `docs/stage9/` |
 
 每阶段固定交付：**目标 → 文件树 → 代码 → 启动命令 → 测试方法 → 已知风险 → 验收清单**，你确认后才进入下一阶段。
 
@@ -118,6 +119,7 @@ QlibQuantLab/
 ├── docs/stage6/      阶段 6 交付文档（合规与可验证性补齐）
 ├── docs/stage7/      阶段 7 交付文档（Casdoor OIDC + 生产部署）
 ├── docs/stage8/      阶段 8 交付文档（CI 门禁 / 可观测 / 平台审计 / 备份演练）
+├── docs/stage9/      阶段 9 交付文档（镜像发布 / 生产演练 / 表 A 实测 / 告警链 / 备份异地 / 运维手册）
 ├── .github/workflows/  ci.yml（push 门禁）· stage-smoke.yml（手动重冒烟）
 ├── docker-compose.yml       模式 A · 自包含（qlib 链路挂 --profile qlib）
 ├── docker-compose.prod.yml  模式 B · 复用外部依赖 + Traefik
@@ -164,6 +166,7 @@ TEST_REDIS_URL=redis://localhost:16379/9 uv run pytest tests/contract -q
 - `docs/stage6/` — 阶段 6：审计导出、RBAC 扫描、universe、导出/持仓/打印、因子计算/IC、训练复用、合规页、Playwright e2e
 - `docs/stage7/` — 阶段 7：Casdoor OIDC（PKCE/JWKS/fail-closed）、生产部署定稿（模式 B / R9 Traefik / R11 Redis 拆分）
 - `docs/stage8/` — 阶段 8：CI 三 job 门禁、`/metrics` + Prometheus、平台审计与平台管理员、备份/恢复演练、Traefik·双 Redis rehearsal 验证表
+- `docs/stage9/` — 阶段 9：镜像发布与追溯回滚、`rehearsal_up.sh` 生产栈演练、表 A 实测与 A6 数据路径定性、告警链（Alertmanager/Grafana/通知桥）、备份异地同步、运维手册
 - 阶段 1 风险登记册与七阶段路线图见 `docs/stage1/08-risks-and-roadmap.md`
 - **面向外部用户的文档**在 `website/docs/`（5 分钟跑起来 / 核心概念 / 模块指南 / 部署），与上面的内部交付文档刻意分开
 

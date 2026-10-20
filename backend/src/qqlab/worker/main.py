@@ -92,8 +92,10 @@ class Worker:
             },
         )
         if self.settings.COMPUTE_BACKEND == "qlib":
-            # 启动探测：qlib-server 不可达只告警不退出（消费循环继续，
-            # 具体任务会在 run_backtest 里快速失败并把 job 标记 failed —— 见阶段 1 §7）
+            # 启动探测：qlib-server 不可达只告警不退出（消费循环继续）。取数走本地
+            # 共享卷（LocalProvider），任务不依赖本探测（stage1/06 §8.6 定性）；
+            # 探测失败只意味着 Traefik/qlib-server 入口断——影响 smoke L1 与
+            # 未来若启用 ClientProvider 的数据链路，不影响当前任务执行。
             from qqlab.worker.qlib_env import probe_qlib_server  # noqa: PLC0415
 
             ok, detail = probe_qlib_server(self.settings)

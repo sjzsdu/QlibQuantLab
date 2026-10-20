@@ -1,0 +1,161 @@
+# docker-compose.infra-sim.yml —— 阶段 9 · B 项：模式 B 演练的「外部托管基础设施」模拟。
+#
+# 生产语义：模式 B（docker-compose.prod.yml）**不启动任何基础设施**，地址全部由 .env 指向
+# 外部实例。演练机上没有外部实例，本文件扮演它们（独立 compose 项目 qqlab-infra-sim，
+# 与演练 prod 栈经外部网络互通 —— 等价于「托管实例恰好网络可达」）：
+#
+#   postgres   → DATABASE_URL        （账号/密码为演练常量，勿复用到生产）
+#   app-redis  → CACHE_URL           （带密码 —— 应用侧缓存，R11 方案②）
+#   rabbitmq   → MQ_URL + QLIB_SERVER_QUEUE_*（应用账号 + qlib-server 专用账号，见 rabbitmq-init）
+#   minio      → STORAGE_S3_*        （S3 兼容；bucket 由 backend 启动惰性创建）
+#
+# 用法（由 scripts/rehearsal_up.sh 编排，也可手动）：
+#   docker compose --env-file deploy/rehearsal/env.rehearsal \
+#     -f deploy/rehearsal/docker-compose.infra-sim.yml up -d
+#   docker compose --env-file deploy/rehearsal/env.rehearsal \
+#     -f deploy/rehearsal/docker-compose.infra-sim.yml run --rm rabbitmq-init
+#
+# 宿主端口仅回环暴露（管理/验证用），业务流量全部走容器网络。
+
+name: qqlab-infra-sim
+
+services:
+  postgres:
+    image: postgres:16-alpine # 与 pg_dump/pg_restore 同 tag（backup/restore 版本天然匹配）
+    environment:
+      POSTGRES_USER: qqlab
+      POSTGRES_PASSWORD: rehearsal-postgres-pass
+      POSTGRES_DB: qqlab
+    volumes: [rehearsal_pg_data:/var/lib/postgresql/data]
+    ports: ["127.0.0.1:15434:5432"]
+    networks: [rehearsal]
+    labels: ["traefik.enable=false"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U qqlab -d qqlab"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  app-redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "rehearsal-app-redis-pass"]
+    volumes: [rehearsal_app_redis_data:/data]
+    ports: ["127.0.0.1:16382:6379"]
+    networks: [rehearsal]
+    labels: ["traefik.enable=false"]
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a rehearsal-app-redis-pass ping | grep PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: qqlab
+      RABBITMQ_DEFAULT_PASS: rehearsal-rabbit-pass
+    volumes: [rehearsal_rabbitmq_data:/var/lib/rabbitmq]
+    ports: ["127.0.0.1:15673:15672"]
+    networks: [rehearsal]
+    labels: ["traefik.enable=false"]
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 10s
+      retries: 20
+    restart: unless-stopped
+
+  # qlib-server 专用账号（R11 同理：stage7/03 §4 要求 qlib-server 用独立 RabbitMQ 账号）。
+  # 应用账号 qqlab 由 RABBITMQ_DEFAULT_USER 自动建并授权 "/"；本 init 只补 qlib 专用账号。
+  # 走 management HTTP API（跨容器 rabbitmqctl 因 Erlang cookie 无法连接 —— dev 栈同款实测结论）。
+  rabbitmq-init:
+    image: rabbitmq:3.13-management-alpine
+    depends_on:
+      rabbitmq: {condition: service_healthy}
+    environment:
+      QLIB_MQ_USER: qqlab-qlib
+      QLIB_MQ_PASS: rehearsal-qlib-rabbit-pass
+      MQ_MGMT: http://rabbitmq:15672
+      ADMIN_USER: qqlab
+      ADMIN_PASS: rehearsal-rabbit-pass
+    command:
+      - sh
+      - -c
+      - |
+        python3 - <<'PY'
+        import base64, json, os, time, urllib.error, urllib.request
+
+        base = os.environ["MQ_MGMT"]
+        auth = "Basic " + base64.b64encode(
+            f"{os.environ['ADMIN_USER']}:{os.environ['ADMIN_PASS']}".encode()
+        ).decode()
+
+        def call(method, path, body=None):
+            req = urllib.request.Request(
+                base + path,
+                method=method,
+                data=json.dumps(body).encode() if body is not None else None,
+                headers={"Content-Type": "application/json", "Authorization": auth},
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                return resp.status
+
+        quser = os.environ["QLIB_MQ_USER"]
+        qpass = os.environ["QLIB_MQ_PASS"]
+        last = None
+        for i in range(30):
+            try:
+                print("create qlib user ->", call(
+                    "PUT", f"/api/users/{quser}",
+                    {"password": qpass, "tags": ""},
+                ))
+                print("grant qlib user on / ->", call(
+                    "PUT", f"/api/permissions/%2F/{quser}",
+                    {"configure": ".*", "write": ".*", "read": ".*"},
+                ))
+                print("verify ->", call("GET", f"/api/permissions/%2F/{quser}"))
+                raise SystemExit(0)
+            except SystemExit:
+                raise
+            except (urllib.error.URLError, OSError, TimeoutError) as exc:
+                last = exc
+                print(f"retry {i}: {exc}")
+                time.sleep(2)
+        raise SystemExit(f"rabbitmq-init failed: cannot provision qlib user: {last}")
+        PY
+    networks: [rehearsal]
+    restart: "no"
+
+  # MinIO：S3 兼容端点（STORAGE_S3_ENDPOINT=http://minio:9000）。
+  # 镜像源现实（阶段 9 实测 2026-10-19）：官方 minio/minio 已从 Docker Hub 移除（.env.example
+  # 早有记录）；quay.io/minio/minio 不存在（401）；bitnami/minio tags 已清空 —— 唯一可达的是
+  # Bitnami 冻结归档 bitnamilegacy/minio（2025.7.23 快照）。仅限演练用；生产用托管 S3。
+  # 故意不写 healthcheck（镜像内无 curl）；宿主验证：curl -sf http://127.0.0.1:19001/minio/health/live
+  # bucket 由 backend 的 S3StorageProvider.ping() 惰性创建（head_bucket → create_bucket）。
+  minio:
+    image: bitnamilegacy/minio:2025.7.23
+    # 不覆盖 command：bitnami 默认 `server /bitnami/minio/data`；写成 `server /data` 会指到
+    # root 属主的容器层 → FATAL file access denied（实测）
+    environment:
+      MINIO_ROOT_USER: qqlab
+      MINIO_ROOT_PASSWORD: rehearsal-minio-secret
+    # 必须挂到镜像声明的 VOLUME 路径本身（/bitnami/minio/data）—— 挂到父目录时 Docker 会
+    # 另外自动挂一个 root 属主的匿名卷，非 root 进程写不进（实测 FATAL file access denied）
+    volumes: [rehearsal_minio_data:/bitnami/minio/data]
+    ports: ["127.0.0.1:19001:9000", "127.0.0.1:19002:9001"]
+    networks: [rehearsal]
+    labels: ["traefik.enable=false"]
+    restart: unless-stopped
+
+networks:
+  rehearsal:
+    external: true
+    name: ${REHEARSAL_NETWORK:-qqlab-prod-rehearsal-traefik}
+
+volumes:
+  rehearsal_pg_data:
+  rehearsal_app_redis_data:
+  rehearsal_rabbitmq_data:
+  rehearsal_minio_data:

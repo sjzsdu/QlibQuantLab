@@ -1,0 +1,74 @@
+# traefik.prod-rehearsal.yml —— 阶段 9 · C 项：演练机 Traefik v3 静态配置。
+#
+# 与 stage8 的 traefik.rehearsal.yml 差异：这次演练的是 **docker-compose.prod.yml 本体**
+# （Host 路由 + websecure TLS + 生产 labels 1:1），而不是 PathPrefix 简化路由：
+#
+#   web        :80   → 301 到 https（生产同款语义）
+#   websecure  :443  → Host 路由（app/api/qlib.rehearsal.test），**超时全 0**（R9 生产定稿，
+#                      docs/stage7/03 §3.2 逐字段照抄）；TLS 用演练自签证书
+#                      （deploy/rehearsal/certs/，scripts/rehearsal_up.sh 自动生成）
+#   qlibws     :9711 → PathPrefix(`/`) 全量进 qlib-server（R9 labels 同生产 §3.1；
+#                      worker 的 A6 等效路径走这个明文 WS 入口，避开自签证书校验）
+#   dashboard  :8080 → 宿主 127.0.0.1:8082
+#
+# certificatesResolvers.rehearsal-placeholder：占位域名拿不到真证书（ACME 永不成功），
+# 但**必须声明**，否则 prod labels 里 `tls.certresolver=${TRAEFIK_CERT_RESOLVER}` 引用
+# 不存在的 resolver 会把 router 打成 errored。ACME 失败期间 Traefik 回落 entrypoint
+# 级自签证书服务 —— 正是演练要的效果。真实部署换真 resolver 名即可（改 env，零改文件）。
+
+entryPoints:
+  web:
+    address: ":80"
+    http:
+      redirections:
+        entryPoint:
+          to: websecure
+          scheme: https
+
+  websecure:
+    address: ":443"
+    # TLS 默认证书不在静态 entrypoint 配置（v3.7.15 实测 http.tls.certificates 不被解析）——
+    # 由 file provider 动态配置提供（traefik.rehearsal-dynamic.yml，挂到 /etc/dynamic）。
+    transport:
+      respondingTimeouts: # R9 生产定稿（stage7/03 §3.2）：WebSocket 长连接不能被掐断
+        readTimeout: 0
+        writeTimeout: 0
+      # 阶段 9 实测修正：早前文档的 `transportingTimeouts`（responseHeaderTimeout/idleTimeout）
+      # 在 Traefik v3.7.15 不存在（启动即拒 field not found）；上游侧超时改在全局
+      # serversTransport.forwardingTimeouts（见文件末），与入口侧 respondingTimeouts 配合才是完整定稿。
+
+  qlibws:
+    address: ":9711" # Qlib WebSocket 明文专用入口（A3/A4/A6 演练路径）
+    transport:
+      respondingTimeouts:
+        readTimeout: 0
+        writeTimeout: 0
+
+api:
+  dashboard: true
+  insecure: true # dashboard 落内部 :8080，compose 映射到宿主 127.0.0.1:8082
+
+providers:
+  docker:
+    exposedByDefault: false # 只有显式 traefik.enable=true 的容器才进路由表
+    network: qqlab-prod-rehearsal-traefik # 上游固定走演练外部网络（与 internal 并存时必须指定）
+  file:
+    directory: /etc/dynamic # 演练默认证书（traefik.rehearsal-dynamic.yml）
+
+certificatesResolvers:
+  rehearsal-placeholder:
+    acme:
+      email: rehearsal@invalid.local # 占位：永远签不下来，只为让 prod labels 的引用有效
+      storage: /acme/acme.json
+      caServer: https://acme-staging-v02.api.letsencrypt.org/directory
+      tlsChallenge: {}
+
+# 全局上游传输（应用到所有 router 的默认 serversTransport）：
+#   insecureSkipVerify —— 后端为 http 时跳过证书校验（生产同款）；
+#   forwardingTimeouts —— 上游侧超时归零（responseHeaderTimeout 等同于早前文档里的
+#     transportingTimeouts 语义；v3.7.15 实测唯一正确位置，阶段 9 实测修正）。
+serversTransport:
+  insecureSkipVerify: true
+  forwardingTimeouts: # v3.7.15 实测只有这两个字段（idleTimeout 不存在；空闲归入口 read/write 超时）
+    responseHeaderTimeout: 0
+    dialTimeout: 30s

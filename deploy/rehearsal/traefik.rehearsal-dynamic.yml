@@ -1,0 +1,13 @@
+# traefik.rehearsal-dynamic.yml —— 阶段 9 · C 项：演练默认证书（file provider 动态配置）。
+#
+# Traefik v3.7.15 实测（阶段 9）：静态 entrypoint 级 `http.tls.certificates` 不被解析
+# （field not found）；入口默认证书的正确位置是 **file provider 的动态 tls.certificates**。
+# 演练自签证书由 scripts/rehearsal_up.sh 生成（deploy/rehearsal/certs/，不入库）。
+#
+# 效果：websecure 上所有 router（含 certresolver 占位 ACME 永不成功的演练场景）回落到
+# 这张自签证书服务 —— curl -k / 浏览器例外即可验证 TLS 终止、Host 路由与安全响应头。
+
+tls:
+  certificates:
+    - certFile: /certs/rehearsal.crt
+      keyFile: /certs/rehearsal.key

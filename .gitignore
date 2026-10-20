@@ -27,6 +27,12 @@ out/
 # --- 运行期数据 ---
 # 逻辑备份产物（scripts/backup.sh）—— dump 含业务数据，不入库
 backups/
+# 镜像发布清单（scripts/build_push_images.sh 生成）—— 每次构建产物，发版记录进 docs/stage9/02
+deploy/image-manifest.json
+# 演练自签证书（scripts/rehearsal_up.sh 生成，含私钥）—— 永不入库
+deploy/rehearsal/certs/
+# 工具项目标识（外部工具生成，非仓库内容）
+.freebuff/
 # 本地对象存储（STORAGE_BACKEND=local）
 # 注意：`data/` 会误伤前端路由目录 frontend/src/app/data/，显式放行
 data/

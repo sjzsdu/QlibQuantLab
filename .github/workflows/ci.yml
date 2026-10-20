@@ -33,6 +33,11 @@ jobs:
     name: backend · ruff + pytest（stub compute）
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    defaults:
+      # uv sync / ruff / pytest / alembic 均须在 backend/ 下跑：仓库根目录无 pyproject.toml，
+      # 不设 defaults 时 uv sync 第一步即 fail（阶段 9 审查实测复现）
+      run:
+        working-directory: backend
     env:
       APP_ENV: test
       COMPUTE_BACKEND: stub

@@ -1,0 +1,261 @@
+# docker-compose.prod-rehearsal.yml —— 阶段 9 · B/C 项：模式 B 生产栈的演练 override。
+#
+# 与 docker-compose.prod.yml 合并使用（演练 = 生产 compose 本体 + 本文件），**不改 .env**：
+#
+#   docker compose \
+#     --env-file deploy/rehearsal/env.rehearsal \
+#     -f docker-compose.prod.yml \
+#     -f deploy/rehearsal/docker-compose.prod-rehearsal.yml \
+#     --profile qlib up -d
+#
+# 本文件只做四件事：
+#   1. 项目名改 qqlab-prod-rehearsal（与 dev 栈 qqlab、infra 模拟 qqlab-infra-sim 互不干扰）；
+#   2. environment: 覆盖演练常量（优先级高于 env_file: [.env]）——占位域名/TLS、外部实例
+#      指向 infra-sim、casdoor 复用 dev 实例（qqlab-dev-client，redirect 指演练域名）；
+#   3. 起演练 Traefik（生产同款超时语义 + 演练自签证书，静态配置 traefik.prod-rehearsal.yml）；
+#   4. qlib-server 补 qlibws 明文 WS 入口 labels（R9 label 集与生产 §3.1 完全一致）+
+#      挂 dev 栈已导入的 qlib 数据卷（复用，避免重复导入）。
+#
+# 回滚：docker compose --env-file … -f … -f … --profile qlib down（卷保留；
+# 容器/网络随项目删除，dev 栈零影响）。
+
+name: qqlab-prod-rehearsal
+
+# 演练常量（无真实密钥；占位域名 / 演练密码 / dev casdoor 凭据）。
+# 镜像 tag 不在这里 —— 由 --env-file env.rehearsal 的 IMAGE_TAG 插值决定。
+x-rehearsal-env: &rehearsal-env
+  # --- 平台行为：生产模式（AUTH_PROVIDER=mock 会被 fail-fast 拒绝，正是要测的）
+  APP_ENV: production
+  AUTH_PROVIDER: casdoor
+  SESSION_COOKIE_SECURE: "true" # 演练走 https（自签），Cookie Secure 与生产一致
+  CORS_ALLOW_ORIGINS: https://app.rehearsal.test
+  APP_JWT_SECRET: rehearsal-jwt-secret-0123456789abcdefghijklmn # ≥32 演练常量，勿复用
+
+  # --- 外部实例（infra-sim 扮演；模式 B 等效 = 换成托管实例地址）
+  DATABASE_URL: postgresql+asyncpg://qqlab:rehearsal-postgres-pass@postgres:5432/qqlab
+  CACHE_URL: "redis://:rehearsal-app-redis-pass@app-redis:6379/5"
+  MQ_URL: amqp://qqlab:rehearsal-rabbit-pass@rabbitmq:5672/%2F
+  CACHE_BACKEND: redis
+  MQ_BACKEND: rabbitmq
+  STORAGE_BACKEND: minio
+  STORAGE_S3_ENDPOINT: http://minio:9000
+  STORAGE_S3_BUCKET: qqlab
+  STORAGE_S3_ACCESS_KEY: qqlab
+  STORAGE_S3_SECRET_KEY: rehearsal-minio-secret
+  STORAGE_S3_PATH_STYLE: "true"
+
+  # --- Qlib 链路（worker 真实回测走 qlib；A6 等效路径 = 经 Traefik qlibws 明文入口）
+  COMPUTE_BACKEND: qlib
+  QLIB_SERVER_WS_URL: ws://qlib.rehearsal.test:9711
+  QLIB_SERVER_QUEUE_HOST: rabbitmq
+  QLIB_SERVER_QUEUE_USER: qqlab-qlib # rabbitmq-init 建的 qlib 专用账号（R11 同理）
+  QLIB_SERVER_QUEUE_PASS: rehearsal-qlib-rabbit-pass
+  QLIB_SERVER_REDIS_HOST: qlib-redis # R11 方案②：prod compose 内置 qlib-redis 服务
+
+  # --- Casdoor（演练专属实例，下方 casdoor 服务；拓扑与 dev 栈 1:1：
+  # 浏览器走宿主映射端口 18001；后端容器走 compose 服务名 —— INTERNAL_URL 拆分语义）
+  # 为什么不复用 dev casdoor：`docker network connect` 后加入的容器名不进 OrbStack/宿主
+  # 代理的 DNS（实测解析到 fake-IP 198.18.x → 连接被重置）—— 专属实例随项目创建，DNS 正常。
+  CASDOOR_ISSUER: http://localhost:18001
+  CASDOOR_INTERNAL_URL: http://casdoor:8000
+  CASDOOR_CLIENT_ID: qqlab-dev-client
+  CASDOOR_CLIENT_SECRET: qqlab-dev-secret-0123456789abcdef
+  CASDOOR_REDIRECT_URI: https://app.rehearsal.test/api/v1/auth/callback
+  CASDOOR_ORG_ID_CLAIM: owner
+  CASDOOR_ROLE_MAP: "{}" # 直通（dev 种子角色名与平台一致）
+  CASDOOR_ORG_MAP: '{"qqlab":"dev-org"}' # IdP org qqlab → 平台 dev-org（复用 dev 数据目录）
+
+  # --- 可观测 / 平台治理（阶段 8 键位；生产未配 token 时 /metrics 404 fail-closed）
+  METRICS_TOKEN: rehearsal-metrics-token-0123456789
+  PLATFORM_ADMIN_USERS: smoke-admin
+
+services:
+  backend:
+    environment: *rehearsal-env
+
+  worker:
+    environment: *rehearsal-env
+    volumes:
+      # 在线模式 provider_uri/mount_path 指向本地路径（R4：替代 NFS）——与 dev 栈同款挂法
+      - qqlab_qlib_data:/qlib_data
+      - rehearsal_experiments:/experiments # 训练产物独立卷（不共享 dev 栈）
+
+  migrate:
+    environment: *rehearsal-env
+
+  qlib-server:
+    environment:
+      # entrypoint 短名键（prod compose 已映射 QLIB_SERVER_* → 这里再显式钉演练值，
+      # 不依赖 .env 的 dev 默认值）
+      REDIS_HOST: qlib-redis
+      REDIS_PORT: "6379"
+      REDIS_DB: "0"
+      QUEUE_HOST: rabbitmq
+      QUEUE_USER: qqlab-qlib
+      QUEUE_PASS: rehearsal-qlib-rabbit-pass
+      MESSAGE_QUEUE: message_queue
+      TASK_QUEUE: task_queue
+      FLASK_SERVER_HOST: 0.0.0.0
+      QLIB_DATA: /qlib_data/dev-org/cn_data # 复用 dev 栈已导入数据集（与 ORG_MAP 对齐）
+      REGION: cn
+    volumes:
+      # 复用 dev 栈的 qlib 数据卷（dump_bin 只读语义；导入一次到处可用 —— R7 配方）
+      - qqlab_qlib_data:/qlib_data
+    labels:
+      # qlibws 明文 WS 入口（A3/A4/A6 演练路径）。R9 label 集与生产 §3.1 逐字段一致；
+      # 与 prod compose 的 Host 路由 labels（qqlib router）并存，互不覆盖。
+      - "traefik.http.routers.qlib-ws-plain.rule=PathPrefix(`/`)"
+      - "traefik.http.routers.qlib-ws-plain.entrypoints=qlibws"
+      - "traefik.http.services.qlib-ws-plain.loadbalancer.server.port=9710"
+      - "traefik.http.services.qlib-ws-plain.loadbalancer.passHostHeader=true"
+      - "traefik.http.services.qlib-ws-plain.loadbalancer.responseForwarding.flushInterval=1ms"
+      - "traefik.http.services.qlib-ws-plain.loadbalancer.sticky.cookie=true"
+      # 显式 service 指派：演练里同端口 9710 有两个 service（qqlib + qlib-ws-plain），
+      # 不指派时 Traefik 会把两个 router 各绑两个 service 并报 ERR（实测）
+      - "traefik.http.routers.qlib-ws-plain.service=qlib-ws-plain"
+      - "traefik.http.routers.qqlib.service=qqlib"
+      # （曾怀疑 qqlib-ws 强制升级头中间件破坏 polling/WS 握手 —— 实测排除：当时的真实失败
+      #  原因是自签证书未进 requests/websocket-client 的信任链。恢复生产同款中间件后
+      #  EIO3 polling 握手经本入口穿透通过（握手响应 upgrades:[]；裸 Upgrade 400，直连同然
+      #  —— qlib-server 本就不提供 WS 升级，不存在真·wss 会话）。记录见 docs/stage9/05。）
+
+  # ---------------------------------------------------------------- 演练专属 Casdoor
+  # 与 dev 栈同镜像/同种子（init_data.json：app-qqlab + qqlab-dev-client + 演练 redirect 已入）
+  casdoor:
+    image: casbin/casdoor-all-in-one:latest
+    platform: ${CASDOOR_PLATFORM:-linux/amd64}
+    ports: ["127.0.0.1:18001:8000"]
+    environment:
+      driverName: sqlite
+      dataSourceName: "file:/data/casdoor.db?cache=shared"
+    volumes:
+      - rehearsal_casdoor_data:/data
+      - ./deploy/casdoor/init_data.json:/init_data.json:ro # 幂等种子（阶段 7 同款）
+    networks: [traefik]
+    labels: ["traefik.enable=false"]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/.well-known/openid-configuration"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------- 监控/告警（阶段 9 · D 项）
+  # 生产形态：Prometheus 带 METRICS_TOKEN 抓取（生产 /metrics fail-closed）；
+  # 告警链 = rules.yml → Alertmanager → notify-bridge（通道由桥的 env 配置驱动）；
+  # Grafana 供给数据源 + Qqlab 仪表盘（deploy/monitor/grafana/）。
+  prometheus:
+    image: quay.io/prometheus/prometheus:v3.5.0
+    # 官方镜像配置文件不能读 env → 容器内 sed 把 __METRICS_TOKEN__ 换成真值再启动
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        sed "s/__METRICS_TOKEN__/$${METRICS_TOKEN}/g" /etc/prometheus/prometheus.src.yml
+        > /tmp/prometheus.yml && exec /bin/prometheus
+        --config.file=/tmp/prometheus.yml
+        --storage.tsdb.path=/prometheus
+        --storage.tsdb.retention.time=15d
+    environment:
+      METRICS_TOKEN: rehearsal-metrics-token-0123456789 # 与 backend override 同值
+    volumes:
+      - ./deploy/monitor/prometheus.rehearsal.yml:/etc/prometheus/prometheus.src.yml:ro
+      - ./deploy/monitor/rules.yml:/etc/prometheus/rules.yml:ro
+      - prometheus_rehearsal_data:/prometheus
+    ports: ["127.0.0.1:19090:9090"]
+    networks: [traefik]
+    restart: unless-stopped
+
+  alertmanager:
+    image: quay.io/prometheus/alertmanager:v0.29.0
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+    volumes:
+      - ./deploy/monitor/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager_rehearsal_data:/alertmanager
+    ports: ["127.0.0.1:19093:9093"]
+    networks: [traefik]
+    depends_on:
+      notify-bridge: {condition: service_healthy}
+    restart: unless-stopped
+
+  notify-bridge:
+    image: python:3.12-slim
+    command: ["python3", "/app/notify_bridge.py"]
+    environment: # 启用哪些通道纯配置（留空 = 只落 sink 留档）；配 URL 即启用，代码零改动
+      NOTIFY_SINK_DIR: /var/lib/qqlab-notify/sink
+      NOTIFY_WECOM_URL: ${NOTIFY_WECOM_URL:-}
+      NOTIFY_DINGTALK_URL: ${NOTIFY_DINGTALK_URL:-}
+      NOTIFY_DINGTALK_SECRET: ${NOTIFY_DINGTALK_SECRET:-}
+      NOTIFY_FEISHU_URL: ${NOTIFY_FEISHU_URL:-}
+      NOTIFY_EMAIL_HOST: ${NOTIFY_EMAIL_HOST:-}
+      NOTIFY_EMAIL_PORT: ${NOTIFY_EMAIL_PORT:-587}
+      NOTIFY_EMAIL_USER: ${NOTIFY_EMAIL_USER:-}
+      NOTIFY_EMAIL_PASSWORD: ${NOTIFY_EMAIL_PASSWORD:-}
+      NOTIFY_EMAIL_FROM: ${NOTIFY_EMAIL_FROM:-}
+      NOTIFY_EMAIL_TO: ${NOTIFY_EMAIL_TO:-}
+    volumes:
+      - ./deploy/monitor/notify_bridge.py:/app/notify_bridge.py:ro
+      - notify_sink_rehearsal:/var/lib/qqlab-notify/sink
+    ports: ["127.0.0.1:19094:9099"]
+    networks: [traefik]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:9099/healthz')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:12.0.2 # docker.io 官方（quay 镜像为空）；拉取失败重试
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-rehearsal-grafana-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./deploy/monitor/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/monitor/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_rehearsal_data:/var/lib/grafana
+    ports: ["127.0.0.1:13100:3000"]
+    networks: [traefik]
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------- 演练 Traefik
+  traefik:
+    image: traefik:v3.7.15 # 2026-10-15 发布含 CVE 修复（stage8 同款钉版）
+    volumes:
+      - ./deploy/rehearsal/traefik.prod-rehearsal.yml:/etc/traefik/traefik.yml:ro
+      - ./deploy/rehearsal/traefik.rehearsal-dynamic.yml:/etc/dynamic/cert.yml:ro # 默认证书（动态）
+      - ./deploy/rehearsal/certs:/certs:ro # 演练自签证书（rehearsal_up.sh 生成）
+      - /var/run/docker.sock:/var/run/docker.sock:ro # docker provider（只读）
+      - rehearsal_acme:/acme # 占位 resolver 的 ACME 存储（永不成功，只为引用有效）
+    ports:
+      - "127.0.0.1:80:80" # web（301 → https）
+      - "127.0.0.1:443:443" # websecure（Host 路由 + TLS，超时全 0）
+      - "127.0.0.1:9711:9711" # qlibws（明文 WS 专用入口）
+      - "127.0.0.1:8082:8080" # dashboard
+    networks:
+      traefik:
+        # A6 关键：让 worker 的 ws://qlib.rehearsal.test:9711 在容器内解析到 Traefik 自身。
+        # 宿主 /etc/hosts 把占位域名指到 127.0.0.1，OrbStack 会把该解析带进容器（实测
+        # worker 内 getaddrinfo → 127.0.0.1:9711 → 拒连，probe ok=false ×2）。Docker
+        # 内嵌 DNS 对本网络拥有的 alias 权威应答（优先于宿主 hosts 传播）—— 实测验证生效。
+        # 真实部署无需此条：真实域名经公网 DNS 解析回源站，本 alias 是演练专属补偿。
+        aliases: [qlib.rehearsal.test]
+    labels: ["traefik.enable=false"]
+    restart: unless-stopped
+
+# 网络：直接用 prod compose 定义的 traefik（external，名由 env.rehearsal 的
+# EXTERNAL_TRAEFIK_NETWORK 插值）+ internal —— 本文件不再重复定义。
+
+volumes:
+  # 外部卷：dev 栈建的 qlib 数据卷（导入一次，演练复用）
+  qqlab_qlib_data:
+    external: true
+  rehearsal_experiments:
+  rehearsal_acme:
+  rehearsal_casdoor_data:
+  prometheus_rehearsal_data:
+  alertmanager_rehearsal_data:
+  notify_sink_rehearsal:
+  grafana_rehearsal_data:

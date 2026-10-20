@@ -1,6 +1,9 @@
 # docker-compose.prod.yml —— 模式 B：只部署应用，基础设施与 Traefik/Casdoor 复用用户已有的
 #
-#   docker compose -f docker-compose.prod.yml up -d --build
+#   本地构建路径：  docker compose -f docker-compose.prod.yml up -d --build
+#   镜像拉取路径：  IMAGE_TAG=sha-<git> docker compose -f docker-compose.prod.yml pull
+#                   （镜像由 scripts/build_push_images.sh 构建推送，tag 绑定 git 提交，
+#                     digest 见 deploy/image-manifest.json —— 回滚 = 换回上一份 tag）
 #
 # 与模式 A 的差异：
 #   · 不起 postgres / redis / rabbitmq / minio —— 地址全部由 .env 指向外部实例
@@ -16,6 +19,12 @@ x-prod: &prod
   networks: [traefik, internal]
   labels:
     - "traefik.enable=true"
+  # 日志轮转（阶段 9 · B 项）：宿主不被容器日志吃满
+  logging:
+    driver: json-file
+    options:
+      max-size: "50m"
+      max-file: "3"
 
 services:
   # ---------------------------------------------------------------- 前端
@@ -25,9 +34,21 @@ services:
       # 默认最后阶段 runner：仅含 standalone 产物，非 root 运行
       args:
         BACKEND_INTERNAL_URL: http://backend:8000 # 构建期注入 rewrites 目标
+    image: ${IMAGE_PREFIX:-sjzsdu}/qqlab-frontend:${IMAGE_TAG:-latest} # build 与 pull 双路径共用
     <<: *prod
     environment:
       NEXT_PUBLIC_API_BASE: /api
+    deploy:
+      resources:
+        limits:
+          memory: ${FRONTEND_MEM_LIMIT:-1g} # 资源限额（阶段 9 · B 项；可 env 覆盖）
+    healthcheck:
+      # node:alpine 自带 busybox wget；探 `/`（静态站自身），不依赖 backend 存活
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:3000/"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
     depends_on:
       backend: {condition: service_healthy}
     labels:
@@ -42,10 +63,15 @@ services:
     build:
       context: ./backend
       target: runtime
+    image: ${IMAGE_PREFIX:-sjzsdu}/qqlab-backend:${IMAGE_TAG:-latest}
     <<: *prod
     command: uvicorn qqlab.main:app --host 0.0.0.0 --port 8000 --workers ${BACKEND_WORKERS:-4}
     environment:
       IS_WORKER: "false"
+    deploy:
+      resources:
+        limits:
+          memory: ${BACKEND_MEM_LIMIT:-2g} # N workers；不够时 env 调大再 up -d
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.qqlab-api.rule=Host(`${TRAEFIK_HOST_API}`)"
@@ -78,11 +104,23 @@ services:
     build:
       context: ./backend
       target: worker-runtime
+    image: ${IMAGE_PREFIX:-sjzsdu}/qqlab-worker:${IMAGE_TAG:-latest}
     platform: ${WORKER_PLATFORM:-linux/amd64}
     <<: *prod
     command: qqlab-worker
     environment:
       IS_WORKER: "true"
+    deploy:
+      resources:
+        limits:
+          memory: ${WORKER_MEM_LIMIT:-8g} # qlib 训练/回测峰值内存大；OOM-kill 会表现为 worker 心跳丢失告警
+    healthcheck:
+      # worker 无 HTTP 面：探容器 PID1 即 qqlab-worker 进程本身
+      test: ["CMD-SHELL", "grep -qa qqlab /proc/1/cmdline"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
     labels:
       - "traefik.enable=false"
 
@@ -91,18 +129,76 @@ services:
     build:
       context: ./backend
       target: runtime
+    image: ${IMAGE_PREFIX:-sjzsdu}/qqlab-backend:${IMAGE_TAG:-latest} # 与 backend 同镜像，不额外发布
     <<: *prod
     command: alembic upgrade head
     restart: "no"
+    deploy:
+      resources:
+        limits:
+          memory: 1g
     labels:
       - "traefik.enable=false"
 
   # ---------------------------------------------------------------- Qlib 在线服务（阶段 3 起启用，挂 qlib profile）
+  # ------------------------------------------- Qlib-Server 专属免密 Redis（R11 方案②生产就位）
+  # qlib_server/utils.py 的 get_redis_connection() 无 password 参数（R11）：
+  # 它的 Redis 是私有内部状态，不是应用缓存 —— 单独一个免密实例，只挂 internal 网络、
+  # 零宿主端口；应用侧 CACHE_URL 仍指向带密码的外部 Redis，两者彻底解耦。
+  qlib-redis:
+    profiles: ["qlib"]
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"] # 纯内存态，重启即重建
+    restart: always
+    networks: [internal]
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    labels:
+      - "traefik.enable=false"
+
   qlib-server:
     profiles: ["qlib"]
     build:
       context: ./qlib-server
+    image: ${IMAGE_PREFIX:-sjzsdu}/qqlab-qlib-server:${IMAGE_TAG:-latest}
     <<: *prod
+    environment:
+      # entrypoint.sh 读的是短名（REDIS_HOST/QUEUE_*，无前缀）—— 必须在这里把 .env 的
+      # QLIB_SERVER_* 映射过去，否则落到内置默认（guest/guest、host=redis）——
+      # 阶段 9 · B 项实测发现的 prod compose 缺口（dev compose 一直有此映射）。
+      QUEUE_HOST: ${QLIB_SERVER_QUEUE_HOST:-rabbitmq}
+      QUEUE_USER: ${QLIB_SERVER_QUEUE_USER:-qqlab}
+      QUEUE_PASS: ${QLIB_SERVER_QUEUE_PASS:-qqlab-dev-secret}
+      REDIS_HOST: ${QLIB_SERVER_REDIS_HOST:-qlib-redis} # R11 方案②：专属免密实例（本文件 qlib-redis 服务）
+      REDIS_PORT: ${QLIB_SERVER_REDIS_PORT:-6379}
+      REDIS_DB: ${QLIB_SERVER_REDIS_DB:-0}
+      MESSAGE_QUEUE: ${QLIB_SERVER_MESSAGE_QUEUE:-message_queue}
+      TASK_QUEUE: ${QLIB_SERVER_TASK_QUEUE:-task_queue}
+      FLASK_SERVER_HOST: 0.0.0.0
+      # provider_uri 必须指向 dump_bin 根（{org 目录}/{subdir}）—— 与 worker 的
+      # data_dir_for(settings, org_id) 完全一致，否则 D.features 取不到数
+      QLIB_DATA: /qlib_data/${QLIB_DATA_ORG:-dev-org}/${QLIB_DATA_SUBDIR:-cn_data}
+      REGION: ${QLIB_REGION:-cn}
+    deploy:
+      resources:
+        limits:
+          memory: ${QLIB_SERVER_MEM_LIMIT:-2g} # 数据缓存在内存，导入大数据集时会涨
+    depends_on:
+      qlib-redis: {condition: service_healthy}
+    healthcheck:
+      # 镜像内无 curl；探 socket.io 端口（dev 栈同款命令）
+      test: ["CMD-SHELL", "python -c \"import socket;socket.create_connection(('127.0.0.1',9710),3)\""]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 60s
     # WebSocket 需要长连接：升级头 + passHostHeader + 无响应超时 + sticky（socket.io 轮询回退）
     labels:
       - "traefik.enable=true"

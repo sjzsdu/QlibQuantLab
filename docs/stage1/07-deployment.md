@@ -447,7 +447,11 @@ entryPoints:
 serversTransport:
   insecureSkipVerify: true    # 后端为 http 时
 ```
-> Traefik v2 用 `entryPoints.*.transport.respondingTimeouts`，`transportingTimeouts` 为 v3 字段，按版本取用。**长连接超时是 Qlib WebSocket 在生产上最常见的故障点**，必须显式关闭。
+> Traefik v2 用 `entryPoints.*.transport.respondingTimeouts`。**阶段 9 实测修正（v3.7.15）**：
+> 文档早前写的 `transportingTimeouts`（responseHeaderTimeout/idleTimeout）在 v3.7.15 **不存在**
+> （启动即拒 field not found）——v3 上游侧超时的唯一正确位置是全局 `serversTransport.forwardingTimeouts`
+> （`responseHeaderTimeout` + `dialTimeout`），与入口侧 `respondingTimeouts` 配合才是完整定稿，
+> 实例见 `deploy/rehearsal/traefik.prod-rehearsal.yml`。**长连接超时是 Qlib WebSocket 在生产上最常见的故障点**，必须显式关闭。
 
 ### 3.2 两种模式差异对照
 
@@ -488,7 +492,7 @@ serversTransport:
 1. `curl https://api.…/api/v1/health/ready` → `db/cache/mq/storage/auth` 全绿。
 2. 浏览器访问 `https://app.…` → 跳转 Casdoor → 回跳成功 → 顶栏显示真实用户名/组织。
 3. 提交一个回测任务 → 任务成功 → 曲线可看。
-4. WebSocket：worker 日志出现 `calendar_response`（证明 wss 穿透 Traefik 成功）。
+4. WebSocket 入口：socketio `calendar_request → calendar_response` 经 Traefik 往返成功 + worker 启动 `qlib_server_probe ok=true`（原「worker 日志出现 `calendar_response`」判据不可达成，修正见 stage7/03 §3.3 与 stage1/06 §8.6）。
 5. 审计：`GET /api/v1/audit-logs?action=auth.login` 能查到本次登录。
 6. 负向：直接用 Bearer 访问受保护接口 → 401；跨 org id 访问 → 404。
 7. 断网演练：停掉外部 Redis → `/ready` 变红并给出「Qlib-Server 依赖 Redis」的明确提示。

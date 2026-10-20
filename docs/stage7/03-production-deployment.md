@@ -55,16 +55,27 @@ entryPoints:
       respondingTimeouts:
         readTimeout: 0        # WebSocket 长连接不能被读超时掐断
         writeTimeout: 0
-      transportingTimeouts:   # Traefik v3 字段；v2 用 respondingTimeouts 同位配置
-        responseHeaderTimeout: 0
-        idleTimeout: 0
+      # 阶段 9 实测修正（v3.7.15）：早前的 `transportingTimeouts`（responseHeaderTimeout/
+      # idleTimeout）为不存在字段（启动即拒）—— 上游侧超时改在全局
+      # serversTransport.forwardingTimeouts（见 §3.2 末），入口 respondingTimeouts 与之配合。
 serversTransport:
   insecureSkipVerify: true    # 后端为 http 时
+  forwardingTimeouts:         # v3.7.15 实测唯一正确位置（阶段 9 修正，实例见 deploy/rehearsal/）
+    responseHeaderTimeout: 0
+    dialTimeout: 30s
 ```
 
 ### 3.3 验证（进 §5 清单第 4 项）
 
-worker 日志出现 `calendar_response` = wss 穿透 Traefik 成功；再跑一个真实回测（数据请求走 WS）收敛确认。
+socketio 事件 `calendar_request → calendar_response` 经 Traefik 往返成功 = 入口穿透收敛；
+再跑一个真实回测收敛确认。
+
+> **阶段 9 判据修正**：原判据「worker 日志出现 `calendar_response`」双层不可达成——
+> ① worker 的 qlib provider 全为 `Local*`（数据走本地共享卷，见 stage1/06 §8.6 定性），
+> 从不向 server 发 `calendar_request`；② 即便发出，stock pyqlib 0.9.7 的请求体为 pickle、
+> 而 qlib-server `@0ad527d3` 是 `json.loads`（阶段 9 实测 server 侧 UnicodeDecodeError，无响应）。
+> 现行判据 = **事件往返脚本（JSON body）+ worker 启动 `qlib_server_probe ok=true` + 真实回测
+> succeeded**，三者已在阶段 9 演练栈实测通过（§5.4 表 A A6；证据链见 `docs/stage9/03`）。
 
 ## 4. R11 · Redis 拆分（Qlib-Server 不支持密码）
 
@@ -121,7 +132,9 @@ stage1/08 R11 行状态已回写为「方案定稿 + 切换清单执行项」。
 1. `curl https://api.…/api/v1/health/ready` → `db/cache/mq/storage/auth` 全绿（auth = discovery 可达）。
 2. 浏览器 `https://app.…` → 跳 Casdoor → 回跳成功 → `/api/v1/me` 显示真实用户名/组织/角色（`provider=casdoor`）。
 3. 写操作 CSRF 正常（改名项目等）；登出 → `/login?logged_out=1` 落地且会话 Cookie 清除。
-4. 提交真实回测 → 成功 → 曲线可看；**worker 日志出现 `calendar_response`**（wss 穿透 Traefik，R9 验证）。
+4. 提交真实回测 → 成功 → 曲线可看；**socketio `calendar_request→calendar_response` 经 Traefik
+   往返 + worker 启动 `qlib_server_probe ok=true`**（穿透 Traefik，R9 验证；原「worker 日志
+   `calendar_response`」判据不可达成，见 §3.3 修正注记）。
 5. 审计：`GET /api/v1/audit-logs?action=auth.login` 查到本次登录；`auth.login_failed` 在结构化日志（02 §4）。
 6. 负向：直接 Bearer 访问受保护接口 → 401；跨 org 资源 → 404；连续 6 次 `GET /auth/login` → 第 6 次 429（限流）；
    无角色账号登录 → 401 fail-closed（02 §2.4）。
@@ -142,20 +155,31 @@ docker compose -f docker-compose.yml \
   up -d app-redis qlib-redis backend worker qlib-server
 ```
 
-#### 表 A · Traefik WS 穿透（R9）——**待运维环境执行**
+#### 表 A · Traefik WS 穿透（R9）——阶段 9 演练栈**实测**（2026-10-19）
 
-> 本机未跑真 Traefik：traefik 镜像仅发布在 docker.io（本机当前网络不可达，quay.io 无官方发布）。
-> labels 与静态超时已按生产定稿（§3.1 + §3.2，1:1 照抄）固化进 override
-> （`traefik:v3.7.15`，2026-10-15 发布含 CVE 修复），在有网环境逐行执行即产出实测结果。
+> **入口**：阶段 8 的 dev 栈 override 入口（上文代码块第一条，`docker-compose.rehearsal-traefik.yml`）
+> 在阶段 9 被**生产等效演练栈**取代：`./scripts/rehearsal_up.sh` 起 infra-sim + prod-rehearsal 双 compose
+> （`traefik:v3.7.15`，labels/静态超时与 §3.1+§3.2 生产定稿 1:1，入口 `:9711 = qlibws`）。
+> 旧 override 保留供表 B 历史用，**勿与 rehearsal_up.sh 并跑**（同占 9711 端口会冲突）。
+> 完整证据链与命令记录见 [`docs/stage9/03`](../stage9/03-rehearsal-validation.md)。
 
-| # | 步骤（命令） | 预期 | 判据含义 |
+| # | 步骤（命令） | 预期 | 实测（2026-10-19） |
 |---|---|---|---|
-| A1 | `docker compose -f docker-compose.yml -f deploy/rehearsal/docker-compose.rehearsal-traefik.yml --profile qlib up -d traefik` | traefik 容器起且 `traefik:v3.7.15` | 演练实例就位（qlibws 入口超时全 0） |
-| A2 | `curl -s http://127.0.0.1:8082/api/overview \| head -c 60` | 返回 JSON（dashboard API 活） | docker provider 正常读容器 labels |
-| A3 | `curl -si 'http://127.0.0.1:9711/socket.io/?EIO=4&transport=polling' \| head -3` | `HTTP/1.1 200` + `set-cookie io=…` | socket.io 握手经 Traefik qlibws 入口穿透成功 |
-| A4 | `python scripts/qlib_connectivity_smoke.py ws://localhost:9711` | 全部 check OK（含真 WS upgrade） | **R9 核心**：升级头 + 长连接不被超时掐断 |
-| A5 | `curl -s http://127.0.0.1:8081/api/v1/health/live` | `status=live` | HTTP 前门 → backend 路由正确（`/api` 优先于 `/`） |
-| A6 | 生产等效：worker 日志出现 `calendar_response`（§3.3） | 日志有该事件 | wss 经生产 Traefik 的最终收敛判据 |
+| A1 | `./scripts/rehearsal_up.sh`（或 `docker compose --env-file deploy/rehearsal/env.rehearsal -f docker-compose.prod.yml -f deploy/rehearsal/docker-compose.prod-rehearsal.yml --profile qlib --profile monitor up -d`） | 栈起、traefik `v3.7.15` | ✅ `qqlab-prod-rehearsal-traefik-1` Up（宿主 127.0.0.1 的 80/443/9711/8082）；qlibws 入口静态超时全 0 |
+| A2 | `curl -s http://127.0.0.1:8082/api/overview` | 返回 JSON（dashboard API 活） | ✅ `routers 7 / services 7 / middlewares 6`，**errors=0 warnings=0**（docker provider 正常读 labels） |
+| A3 | `curl -si 'http://127.0.0.1:9711/socket.io/?EIO=3&transport=polling' \| head -3` | `HTTP/1.1 200` + sid | ✅ 200，body `{"sid":…,"upgrades":[],"pingTimeout":60000,…}`（`EIO=4` 同 200；引擎代际实为 EIO3，握手穿透 qlibws 入口成功） |
+| A4 | `docker cp scripts/qlib_connectivity_smoke.py <worker>:/tmp/ && docker exec <worker> python3 /tmp/qlib_connectivity_smoke.py` | L1/L2/L3 全 OK | ✅ exit=0：L1 握手 `ok=true detail=ws://qlib.rehearsal.test:9711`、L2 3875 标的、L3 `$close` 抽样（SH600000…）。**判据语义**：L2/L3 读**本地共享卷**（LocalProvider，非 server 路径），L1 才经 Traefik 到 server；传输为 EIO3 长轮询——server `upgrades:[]` 无 WS 升级、裸 `Upgrade` 400（直连同然，非 Traefik 问题） |
+| A5 | `curl -sk --resolve api.rehearsal.test:443:127.0.0.1 https://api.rehearsal.test/api/v1/health/{live,ready}` | 200 全绿 | ✅ live `status=alive`；ready 200 且 `database/cache/queue/storage/auth` 全 true + `ready=true`（自签证书需 `-k`）；`APP_ENV=production` |
+| A6 | **事件往返**：socketio `calendar_request → calendar_response`（经 worker 容器 `ws://qlib.rehearsal.test:9711` 别名→Traefik）+ worker 启动 `qlib_server_probe ok=true` + 真实回测 | `status=0` + probe ok + job succeeded | ✅ 往返 1.9s 返回 180 个交易日 `status=0`（server 日志七步链全证：Connection→Received→Publish task→DataProcessor→Publish message→Send response→Disconnect）；probe `ok=false×2 → ok=true`（traefik 网络别名修复后，日志 13:05:02）；回测 job `3f61d623` **succeeded/100**（3875 标的，progress 10→50→65→100） |
+
+> **A6 判据定性（阶段 9）**：原判据「worker 日志出现 `calendar_response`」双层不可达成——
+> ① `build_qlib_config` 不设 `*_provider`/`provider` 键（自 stage3 初版 `8bf5836` 即如此），全部走
+> Local 默认（`remote=False`），数据经共享卷本地读取，**qlib-server 不在取数路径上**（证伪实验：
+> flask_server 指向不可达 `192.0.2.1:1` 仍取到 instruments=3875 / feature rows=16231；回测窗口
+> server 日志零连接）；② stock pyqlib 0.9.7 请求体为 pickle、server 为 `json.loads` →
+> UnicodeDecodeError（实测）。R9 影响面随之收敛为：**探测告警（不退出）+ smoke L1**，任务执行
+> 不受影响；`/ready` 检查项不含 qlib-server。数据路径与 ClientProvider 前提详见
+> [`docs/stage1/06-qlib-integration.md`](../stage1/06-qlib-integration.md) §8.6。
 
 #### 表 B · 双 Redis 拆分（R11）——本机演练**实测**（2026-10-19，阶段 8 · E 项）
 

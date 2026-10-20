@@ -2,14 +2,10 @@
 #
 # 抓取面：
 #   - qqlab-backend：GET /api/v1/metrics（dev/test 免鉴权；生产需 METRICS_TOKEN，
-#     在此用 authorization 配置：见下方注释样例）
+#     用 authorization 配置 —— 演练/生产同款见 prometheus.rehearsal.yml）
 #   - prometheus 自身
-# Alertmanager 不内置（范围外：接入企业告警渠道归运维），规则在 /alerts 页面可见。
-#
-# 生产抓取带 token 的样例（部署时启用）：
-#   authorization:
-#     type: Bearer
-#     credentials: "<METRICS_TOKEN>"
+# 告警：规则 rules.yml（五条）→ Alertmanager（alerting 段）→ notify-bridge webhook
+#       → 通道扇出（阶段 9 · D 项，接口+配置驱动，见 alertmanager.yml 头注释）。
 
 global:
   scrape_interval: 15s
@@ -17,6 +13,11 @@ global:
 
 rule_files:
   - /etc/prometheus/rules.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
 
 scrape_configs:
   - job_name: qqlab-backend

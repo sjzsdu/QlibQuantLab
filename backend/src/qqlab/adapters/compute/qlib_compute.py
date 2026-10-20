@@ -145,7 +145,7 @@ class QlibComputeProvider:
 
     # ------------------------------------------------------------ ComputePort
     async def run_backtest(self, spec: BacktestSpec, progress: ProgressCallback) -> BacktestResult:
-        await progress(10, "qlib: 连接 Qlib-Server 取数")
+        await progress(10, "qlib: 读取行情数据")  # 本地共享卷取数，不经 qlib-server（stage1/06 §8.6）
         prices = await asyncio.to_thread(self._fetch_prices, spec)
         logger.info(
             "qlib_prices_fetched",

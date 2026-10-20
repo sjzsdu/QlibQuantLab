@@ -373,6 +373,70 @@ services:
       backend: {condition: service_healthy}
     restart: unless-stopped
 
+  # ---------------------------------------------------------------- 告警链（阶段 9 · D 项）
+  # 链路：rules.yml（五条，阶段 8）→ Alertmanager（分组/抑制/静默）→ notify-bridge
+  #       → 通道扇出（企业微信/钉钉/飞书/邮件 —— 启用哪些纯看下面的 env 配置，留空则只落
+  #       本地 sink 留档）。生产形态的同套组件（带 METRICS_TOKEN 抓取）在演练栈里，
+  #       见 deploy/rehearsal/docker-compose.prod-rehearsal.yml。
+  alertmanager:
+    profiles: ["monitor"]
+    image: quay.io/prometheus/alertmanager:v0.29.0
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+    volumes:
+      - ./deploy/monitor/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager_data:/alertmanager
+    ports: ["127.0.0.1:${HOST_PORT_ALERTMANAGER:-9093}:9093"]
+    networks: [qqlab]
+    depends_on:
+      notify-bridge: {condition: service_healthy}
+    restart: unless-stopped
+
+  notify-bridge:
+    profiles: ["monitor"]
+    # 纯 stdlib 单文件（deploy/monitor/notify_bridge.py），跑在 python 基础镜像里 —— 零新依赖
+    image: python:3.12-slim
+    command: ["python3", "/app/notify_bridge.py"]
+    environment: # 启用哪些通道纯配置；全部留空 = 只落 sink 留档（本地回执）
+      NOTIFY_SINK_DIR: /var/lib/qqlab-notify/sink
+      NOTIFY_WECOM_URL: ${NOTIFY_WECOM_URL:-}
+      NOTIFY_DINGTALK_URL: ${NOTIFY_DINGTALK_URL:-}
+      NOTIFY_DINGTALK_SECRET: ${NOTIFY_DINGTALK_SECRET:-}
+      NOTIFY_FEISHU_URL: ${NOTIFY_FEISHU_URL:-}
+      NOTIFY_EMAIL_HOST: ${NOTIFY_EMAIL_HOST:-}
+      NOTIFY_EMAIL_PORT: ${NOTIFY_EMAIL_PORT:-587}
+      NOTIFY_EMAIL_USER: ${NOTIFY_EMAIL_USER:-}
+      NOTIFY_EMAIL_PASSWORD: ${NOTIFY_EMAIL_PASSWORD:-}
+      NOTIFY_EMAIL_FROM: ${NOTIFY_EMAIL_FROM:-}
+      NOTIFY_EMAIL_TO: ${NOTIFY_EMAIL_TO:-}
+    volumes:
+      - ./deploy/monitor/notify_bridge.py:/app/notify_bridge.py:ro
+      - notify_sink:/var/lib/qqlab-notify/sink
+    ports: ["127.0.0.1:${HOST_PORT_NOTIFY_BRIDGE:-9094}:9099"]
+    networks: [qqlab]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:9099/healthz')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  grafana:
+    profiles: ["monitor"]
+    image: grafana/grafana:12.0.2 # docker.io 官方源（quay 镜像仓为空）；数据源/看板供给不入库外文件
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-qqlab-grafana-dev}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./deploy/monitor/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/monitor/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    ports: ["127.0.0.1:${HOST_PORT_GRAFANA:-3100}:3000"]
+    networks: [qqlab]
+    restart: unless-stopped
+
   # 阶段 8 · D 项（D8-8）：一次性备份/恢复，挂 --profile backup。
   # 范围 = postgres（业务真源：org/用户/项目/因子/任务/审计/平台审计）。
   #   · objects/minio（导出物）与 qlib_data（可经 bootstrap 再导入）不在范围，理由见
@@ -428,6 +492,9 @@ volumes:
   objects_data:
   casdoor_data: # Casdoor dev sqlite（阶段 7，仅 --profile casdoor）
   prometheus_data: # 指标时序库（阶段 8，仅 --profile monitor）
+  alertmanager_data: # 告警状态/静默（阶段 9 · D 项，仅 --profile monitor）
+  notify_sink: # 通知桥本地回执留档（阶段 9 · D 项）
+  grafana_data: # Grafana sqlite/插件（阶段 9 · D 项，仅 --profile monitor）
   backend_venv: # API 侧（Python 3.12）
   worker_venv: # worker 侧（Python 3.11 + qlib）—— 与 API 分开，避免解释器串味
   frontend_node_modules:

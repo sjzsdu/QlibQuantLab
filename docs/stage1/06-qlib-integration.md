@@ -67,7 +67,7 @@ flowchart LR
 | `qlib-server` | 锁定官方仓库 commit SHA，不用 `main` | `qlib-server/Dockerfile` |
 
 **验证方法（阶段 3 第一步，30 分钟内出结论）**：
-1. `pip install python-socketio==4.6.1 python-engineio==3.14.2 pyqlib==0.9.7`，脚本直连 `ws://localhost:9710` emit `calendar_request`，看是否收到 `calendar_response`。
+1. `pip install python-socketio==4.6.1 python-engineio==3.14.2 pyqlib==0.9.7`，脚本直连 `ws://localhost:9710` emit `calendar_request`，看是否收到 `calendar_response`。（**阶段 9 注**：请求体须用 JSON 编码——server 为 `json.loads`；stock client 的 `pickle.dumps` body 会被拒且无响应，见 §8.6。）
 2. 若握手失败 → 逐档排查：client 降到 `socketio==4.4.0/engineio==3.11.2`（与 server 完全一致）。
 3. 若 `pyqlib 0.9.7` 与 server 数据协议不兼容 → 降 `pyqlib` 到 server Dockerfile 当年对应的版本区间（`0.8.x`）。
 
@@ -107,6 +107,10 @@ region: cn
 | 数据卷 | `qlib_data` 命名卷同时挂到 `qlib-server:/qlib_data` 与 `worker:/qlib_data` | 共享数据目录，替代 NFS |
 
 > **前提**：`LocalCalendarProvider/LocalFeatureProvider(remote=True)` 仍从 WS 取数，本地卷只作兜底。**阶段 3 必须实测**确认「不挂 NFS、仅共享卷」能跑通 `D.instruments()` 与 `D.features()`；若实测表明必须 NFS，则回退方案是 compose 给 worker 加 `cap_add: SYS_ADMIN` + `auto_mount: true`，或改用宿主机预挂载。（风险 R4）
+>
+> **阶段 9 定性修正**：上述 `remote=True` 前提**在落盘实现中从未成立**——实际 `build_qlib_config` 未设置
+> `*_provider`/`provider` 键，全部走 Local 默认（`remote=False`），取数全程读本地共享卷，qlib-server
+> 不在数据路径上。结论与证伪实验见 §8.6。
 
 ### `worker/qlib_env.py`（全仓唯一 import qlib 的文件）
 
@@ -138,6 +142,11 @@ def qlib_online(org_id: str, settings: Settings):
         ...  # 清理缓存 H.clear()
 ```
 
+> **阶段 9 落盘核对**：实际 `worker/qlib_env.py::build_qlib_config`（自 stage3 初版 `8bf5836` 起）
+> **未包含**上表 `*_provider` 与 `provider` 键——`default_conf="client"` 只是配置模板名，也不覆盖
+> provider 选择，故全部落 Local 默认（`remote=False`）→ `D.*` 全程读本地共享卷；
+> `flask_server/flask_port` 仅被启动探测（`probe_qlib_server`）与健康探测使用。定性与证伪实验见 §8.6。
+
 **并发约束（重要）**：qlib 的 `C` 配置与缓存是进程级单例 → **同一 worker 进程内不能并发跑不同 org 的任务**。因此 `QLIB_WORKER_CONCURRENCY=1`（每个 worker 串行），并行靠**横向扩容 worker 副本数**（`deploy.replicas`）实现。这一条写进运维文档。
 
 ## 4. 训练与回测的执行链
@@ -152,8 +161,8 @@ sequenceDiagram
 
     WK->>WK: 收到 jobs(kind=backtest)，锁 + 心跳
     WK->>QE: qlib.init(online, org_id)
-    QE->>QS: WS: instrument_request / calendar_request / feature_request
-    QS-->>QE: 数据
+    QE->>QE: D.* 读本地共享卷（LocalProvider，§8.6）
+    Note over QE,QS: qlib-server 不在取数路径；仅启动 probe（socketio 握手）经 WS 探测
     WK->>WK: 读 strategy.signal_config + backtests.cost_config
     WK->>WK: qlib 信号生成 → 交易模拟（自定义 cost）
     WK->>WK: 计算年化/Sharpe/最大回撤/换手率/卡玛
@@ -304,5 +313,50 @@ wsproto<1.2
 
 **观察到的良性 warning**（均不影响功能）：
 
-- `Unrecognized config experiment_uri / flask_server / flask_port`：qlib 0.9.7 client 配置区校验告警，初始化与在线连接照常成功（`flask_server=qlib-server, flask_port=9710` 被正确读取）。
+- `Unrecognized config experiment_uri / flask_server / flask_port`：qlib 0.9.7 client 配置区校验告警，初始化照常成功（`flask_server=qlib-server, flask_port=9710` 进配置与 `__init__` 日志行；**init 本身不建连**，见 §8.6）。
 - `WebSocket transport not available. Install gevent-websocket`：Qlib-Server 走 polling 传输，功能正常；生产可加装 gevent-websocket 提升传输性能。
+
+### §8.6 数据路径定性（阶段 9 回写，2026-10-19）
+
+阶段 9 为表 A A6 判据做调查，用源码链 + 两次实测把 worker 的取数路径钉死，**修正 §3/§4/§8.5 中
+三处与实现不符的表述**（修正注记已就地标注）：
+
+**结论**：worker 的 `D.*` 取数**全程读本地共享卷**（`LocalProvider`，`remote=False`），
+qlib-server **不在数据路径上**；`QLIB_SERVER_WS_URL` 的唯一真实用途 = 启动探测
+（`probe_qlib_server`，socketio EIO3 握手）与健康探测（`ComputePort.healthcheck`，当前无生产调用方）。
+
+**证据三方互证**：
+
+1. **源码链**：`build_qlib_config` 不设 `*_provider`/`provider` 键（git 自 `8bf5836` 起即如此）；
+   `MODE_CONF["client"]` 也不覆盖 provider 选择；`qlib/config.py` 默认
+   `calendar/instrument/expression/dataset/feature_provider` 全 `Local*`、`provider: LocalProvider`；
+   `LocalCalendarProvider.__init__(remote=False)` —— `remote` kwarg 存在但从未被打开。
+2. **回测窗口零连接**：演练栈回测运行期间 qlib-server 日志无任何 `Connection established`
+   （全部连接落在窗口外，且逐条对应启动探测/smoke L1）。
+3. **证伪实验**（决定性）：worker 容器内把 `flask_server` 指向不可达地址 `192.0.2.1:1` 后
+   `qlib.init` 照常成功，`D.list_instruments` = **3875 标的**、`D.features` 抽样 = **16231 行**——
+   数据不经过 flask_server。脚本存 `/tmp/falsify.py`（容器内）。
+
+**修正的三处表述**：
+
+| 位置 | 原表述 | 修正 |
+|------|--------|------|
+| §8.5 性能表 | 「worker 内 qlib init（client 模式，**连 Qlib-Server**）」 | `client` 仅是配置模板名（`default_conf="client"`），init 不建连 |
+| §8.5 性能表 | 「全量取数冷 5m16s；**Qlib-Server 内存热数据**后 ≈40s」 | 10× 加速应归因 **OS 页缓存**（server 不在路径上，同一批 dump_bin 第二次读） |
+| §3 前提 / §4 时序图 | `remote=True` 前提、`QE→QS: WS 取数` | 落盘从未设这些键；时序图已改本地读取 + probe 注记 |
+
+**请求层的双层限制（A6 原判据不可达成的完整原因）**：
+① worker providers 全 Local，**从不 emit** `calendar_request`，故「worker 日志出现 `calendar_response`」
+永远不可达；② 即便启用 ClientProvider，stock pyqlib 0.9.7 的 `send_request` 发 `pickle.dumps(body)`，
+而 vendored qlib-server `@0ad527d3`（`request_handler.py:162`，vendored 与镜像 md5 一致=上游原版）
+是 `json.loads(body)` → 实测 server 侧 `UnicodeDecodeError` traceback、30s 无响应。
+（server 从 pickle 改 json 是安全演进——pickle 反序列化网络输入是 RCE 面；若未来启用 ClientProvider，
+应改 **client 侧** JSON 编码，勿回退 server。）
+
+**阶段 9 实测的可达成 A6 判据**（详见 stage7/03 §5.4 表 A 与 `docs/stage9/03`）：
+socketio `calendar_request → calendar_response` 用 JSON body 经 Traefik 往返成功（1.9s、180 个交易日、
+`status=0`，server 日志七步链全证）+ worker 启动 `qlib_server_probe ok=true` + 真实回测 succeeded/100。
+
+**R9 影响面收敛**：Traefik/qlib-server 断链**不影响任务执行**（数据本地）；影响 = 启动探测告警
+（`worker/main.py` 不退出）+ smoke L1 失败 + 未来 ClientProvider 模式的数据链路。
+`/ready` 检查项（database/cache/queue/storage/auth）不含 qlib-server。

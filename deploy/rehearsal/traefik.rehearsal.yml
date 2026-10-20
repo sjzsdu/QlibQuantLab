@@ -13,9 +13,8 @@ entryPoints:
       respondingTimeouts:
         readTimeout: 0 # WebSocket 长连接不能被读超时掐断（R9）
         writeTimeout: 0
-      transportingTimeouts: # Traefik v3 字段；v2 用 respondingTimeouts 同位配置
-        responseHeaderTimeout: 0
-        idleTimeout: 0
+      # 阶段 9 实测修正：`transportingTimeouts` 在 Traefik v3.7.15 不存在（启动即拒
+      # field not found）；上游侧超时在全局 serversTransport.forwardingTimeouts（文件末）。
 
 api:
   dashboard: true
@@ -25,6 +24,10 @@ providers:
   docker:
     exposedByDefault: false # 只有显式 traefik.enable=true 的容器才进路由表
 
-# 后端为 http 时跳过上游证书校验（生产同款，见 docs/stage7/03 §3.2）
+# 后端为 http 时跳过上游证书校验（生产同款，见 docs/stage7/03 §3.2）；
+# forwardingTimeouts：上游侧超时归零（v3.7.15 实测唯一正确位置，早前 transportingTimeouts 字段无效）
 serversTransport:
   insecureSkipVerify: true
+  forwardingTimeouts: # v3.7.15 实测只有这两个字段（idleTimeout 不存在；空闲归入口 read/write 超时）
+    responseHeaderTimeout: 0
+    dialTimeout: 30s

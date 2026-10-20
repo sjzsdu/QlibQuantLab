@@ -1,0 +1,11 @@
+# Grafana 数据源供给（阶段 9 · D 项）：Prometheus，uid 固定为 "prometheus"（看板 JSON 引用）。
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false

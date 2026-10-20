@@ -1,0 +1,33 @@
+# prometheus.rehearsal.yml —— 阶段 9 · D 项：演练/生产形态的 Prometheus 配置。
+#
+# 与 dev 版（prometheus.yml）的唯一差异：抓取 backend /metrics 带 Bearer token ——
+# 生产未配 METRICS_TOKEN 时端点 404 fail-closed（阶段 8 · S8-1），抓取方必须带 token。
+#
+# token 注入：官方镜像配置文件不能读环境变量 → 容器 entrypoint 用 sed 把
+# __METRICS_TOKEN__ 占位替换成环境变量 METRICS_TOKEN 再启动（compose 里可见）。
+# 替换发生在容器内 /tmp，不落盘、不进镜像。
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/rules.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
+scrape_configs:
+  - job_name: qqlab-backend
+    metrics_path: /api/v1/metrics
+    authorization:
+      type: Bearer
+      credentials: "__METRICS_TOKEN__"
+    static_configs:
+      - targets: ["backend:8000"]
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
